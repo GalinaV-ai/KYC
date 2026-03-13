@@ -1,0 +1,22 @@
+# Environment
+.env
+*.env
+
+# Cases (contain customer PII)
+cases/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
