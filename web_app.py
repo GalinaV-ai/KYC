@@ -514,28 +514,6 @@ def render_main():
 
 def render_chat(case):
     """Left column: chat interface."""
-    # ── Confidence bar + summary ──
-    orch = st.session_state.orchestrator
-    if orch and st.session_state.interview_started and not st.session_state.risk_assessment:
-        pct = _get_confidence_pct()
-        color = "#4caf50" if pct >= 70 else "#ff9800" if pct >= 40 else "#f44336"
-        q_count = len(orch.qa_log)
-        q_hard_max = getattr(orch, '_q_hard_max', 50)
-        st.markdown(f"""
-        <div style="margin: 4px 0 2px 0;">
-            <div style="display:flex; justify-content:space-between; font-size:0.83em;">
-                <span style="color:#888;">Enough information for a decision</span><span><b>{pct}%</b></span>
-            </div>
-            <div class="conf-bar"><div class="conf-fill" style="width:{pct}%;background:{color};"></div></div>
-            <div style="display:flex; justify-content:space-between; font-size:0.78em; color:#aaa; margin-top:2px;">
-                <span>Questions asked</span><span>{q_count} (max {q_hard_max})</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        summary = _get_live_summary()
-        if summary:
-            st.markdown(f'<div class="summary-box"><b>Summary:</b> {summary}</div>', unsafe_allow_html=True)
 
     # Risk assessment results
     if st.session_state.risk_assessment:
