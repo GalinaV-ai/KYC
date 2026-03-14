@@ -33,9 +33,10 @@ st.set_page_config(
 CASES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cases")
 os.makedirs(CASES_DIR, exist_ok=True)
 
-# ─── Minimal CSS ───
+# ─── CSS (desktop + mobile) ───
 st.markdown("""
 <style>
+    /* ── Desktop defaults ── */
     .block-container { padding-top: 2.5rem; }
     .reasoning-card {
         background: #fafafa; border-left: 3px solid #90a4ae;
@@ -58,6 +59,61 @@ st.markdown("""
     [data-testid="stSidebar"] [data-testid="stExpander"] p { font-size: 0.88em; margin: 2px 0; }
     [data-testid="stSidebar"] [data-testid="stCaptionContainer"] { font-size: 0.78em; }
     div[data-testid="stChatMessage"] { padding: 0.5rem 0.75rem; }
+
+    /* ── Mobile adaptations (< 768px) ── */
+    @media (max-width: 768px) {
+        .block-container { padding: 1rem 0.5rem 0.5rem 0.5rem !important; max-width: 100% !important; }
+
+        /* Stack columns vertically */
+        [data-testid="stHorizontalBlock"] {
+            flex-direction: column !important;
+        }
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            width: 100% !important;
+            flex: 1 1 100% !important;
+            min-width: 100% !important;
+        }
+
+        /* Compact chat messages */
+        div[data-testid="stChatMessage"] {
+            padding: 0.3rem 0.5rem !important;
+            font-size: 0.92em;
+        }
+
+        /* Smaller headings */
+        h1 { font-size: 1.4em !important; }
+        h2 { font-size: 1.2em !important; }
+        h3 { font-size: 1.05em !important; }
+
+        /* Metrics — smaller */
+        [data-testid="stMetric"] { padding: 0.3rem 0.2rem !important; }
+        [data-testid="stMetricLabel"] { font-size: 0.75em !important; }
+        [data-testid="stMetricValue"] { font-size: 1.1em !important; }
+
+        /* Reasoning cards — tighter */
+        .reasoning-card { padding: 6px 8px; font-size: 0.78em; }
+
+        /* Sidebar — compact */
+        [data-testid="stSidebar"] { min-width: 260px !important; max-width: 300px !important; }
+        [data-testid="stSidebar"] [data-testid="stExpander"] { font-size: 0.82em; }
+
+        /* Buttons — full width and touch-friendly */
+        button { min-height: 44px !important; }
+
+        /* Download buttons — compact */
+        [data-testid="stDownloadButton"] button { font-size: 0.85em !important; }
+
+        /* Expanders — touch-friendly */
+        [data-testid="stExpander"] summary { min-height: 44px; display: flex; align-items: center; }
+    }
+
+    /* ── Small phones (< 480px) ── */
+    @media (max-width: 480px) {
+        .block-container { padding: 0.5rem 0.3rem !important; }
+        div[data-testid="stChatMessage"] { font-size: 0.88em; }
+        .reasoning-card { font-size: 0.75em; padding: 4px 6px; }
+        [data-testid="stSidebar"] { min-width: 240px !important; }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -853,33 +909,37 @@ def render_risk_assessment(assessment: dict):
     if reasoning:
         st.markdown(f"*{reasoning}*")
 
-    # ── Metrics row ──
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
+    # ── Metrics (2x2 grid — works on mobile) ──
+    row1_c1, row1_c2 = st.columns(2)
+    with row1_c1:
         risk_icon = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🔴", "CRITICAL": "🔴"}.get(risk, "⚪")
         st.metric("Risk Level", f"{risk_icon} {risk}")
-    with c2:
+    with row1_c2:
         st.metric("Overall Score", f"{assessment.get('overall_score', 0):.0%}")
-    with c3:
+    row2_c1, row2_c2 = st.columns(2)
+    with row2_c1:
         st.metric("Confidence", f"{confidence:.0%}")
-    with c4:
+    with row2_c2:
         concerns = assessment.get("concerns", assessment.get("red_flags", []))
         st.metric("Concerns", len(concerns))
 
-    # ── Score bars ──
+    # ── Score bars (2x2 grid) ──
     st.markdown("---")
-    score_cols = st.columns(4)
     scores = [
         ("Business Legitimacy", "business_legitimacy_score", "#388e3c"),
         ("Operational Knowledge", "operational_knowledge_score", "#1976d2"),
         ("Financial Plausibility", "financial_plausibility_score", "#f57c00"),
         ("Consistency", "consistency_score", "#7b1fa2"),
     ]
-    for col, (lbl, key, color) in zip(score_cols, scores):
-        score = assessment.get(key, 0)
-        if isinstance(score, (int, float)):
-            with col:
-                render_score_bar(lbl, score, color)
+    for i in range(0, len(scores), 2):
+        cols = st.columns(2)
+        for j, col in enumerate(cols):
+            if i + j < len(scores):
+                lbl, key, color = scores[i + j]
+                score = assessment.get(key, 0)
+                if isinstance(score, (int, float)):
+                    with col:
+                        render_score_bar(lbl, score, color)
 
     # ── Sanctions Screening ──
     sanctions = assessment.get("sanctions_screening")
@@ -922,15 +982,16 @@ def render_risk_assessment(assessment: dict):
         inconclusive = vf.get("inconclusive", [])
         not_checked = vf.get("not_checked", [])
 
-        # Stats row
-        vc1, vc2, vc3, vc4 = st.columns(4)
-        with vc1:
+        # Stats row (2x2)
+        vr1_c1, vr1_c2 = st.columns(2)
+        with vr1_c1:
             st.metric("Confirmed", len(confirmed))
-        with vc2:
+        with vr1_c2:
             st.metric("Contradicted", len(contradicted))
-        with vc3:
+        vr2_c1, vr2_c2 = st.columns(2)
+        with vr2_c1:
             st.metric("Inconclusive", len(inconclusive))
-        with vc4:
+        with vr2_c2:
             st.metric("Not Checked", len(not_checked))
 
         # Contradicted findings first (most important)
