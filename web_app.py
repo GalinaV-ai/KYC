@@ -255,37 +255,185 @@ def _render_sidebar_verification(v: dict):
         "company_search": ("🏢", "Company Search"),
         "companies_house": ("🏛", "Companies House"),
         "sanctions": ("🔍", "Sanctions Check"),
+        "background_investigation": ("🔎", "Fact Check"),
+        "url_verification": ("🌐", "Website Check"),
+        "linkedin_verification": ("💼", "LinkedIn Check"),
     }
     icon, label = source_map.get(source, ("📋", source.replace("_", " ").title()))
 
-    with st.expander(f"{icon} {label}: {query}", expanded=False):
+    # Short display for query
+    short_query = query[:50] + "…" if len(query) > 50 else query
+
+    # Status-based coloring for investigation results
+    status = result.get("status", "") if isinstance(result, dict) else ""
+    status_indicator = {
+        "confirmed": "🟢", "contradicted": "🔴", "inconclusive": "🟡",
+        "partially_confirmed": "🟡", "not_found": "⚪",
+    }.get(status, "")
+
+    expander_title = f"{icon} {label}"
+    if short_query:
+        expander_title += f": {short_query}"
+    if status_indicator:
+        expander_title = f"{status_indicator} {expander_title}"
+
+    with st.expander(expander_title, expanded=False):
         if not isinstance(result, dict):
             st.caption("No data")
             return
 
-        # ── Sanctions check ──
         if source == "sanctions":
             _render_sanctions(result)
-
-        # ── Companies House ──
         elif source == "companies_house":
             _render_companies_house(result)
-
-        # ── Person search ──
         elif source == "person_search":
             _render_person_search(result)
-
-        # ── Company search ──
         elif source == "company_search":
             _render_company_search(result)
-
+        elif source == "background_investigation":
+            _render_fact_check(result)
+        elif source == "url_verification":
+            _render_url_check(result)
+        elif source == "linkedin_verification":
+            _render_linkedin_check(result)
         else:
-            # Generic fallback — show summary if present
-            summary = result.get("summary", "")
+            summary = result.get("summary", result.get("evidence", ""))
             if summary:
                 st.markdown(f"*{summary}*")
             else:
                 st.caption("Raw data available in case JSON")
+
+
+def _render_fact_check(result: dict):
+    """Render a background fact-check finding."""
+    claim = result.get("claim", "")
+    status = result.get("status", "unknown")
+    evidence = result.get("evidence", "")
+    confidence = result.get("confidence", "")
+
+    status_label = {
+        "confirmed": "🟢 Confirmed",
+        "contradicted": "🔴 Contradicted",
+        "inconclusive": "🟡 Inconclusive",
+        "partially_confirmed": "🟡 Partially confirmed",
+        "not_found": "⚪ Not found",
+    }.get(status, f"⚪ {status}")
+
+    if claim:
+        st.markdown(f"**Claim:** {claim}")
+    st.markdown(f"**Result:** {status_label}")
+    if confidence:
+        st.caption(f"Confidence: {confidence}")
+    if evidence:
+        st.markdown(f"{evidence[:300]}")
+
+
+def _render_url_check(result: dict):
+    """Render a website/URL verification finding."""
+    claim = result.get("claim", "")
+    status = result.get("status", "unknown")
+    evidence = result.get("evidence", "")
+    key_detail = result.get("key_detail", "")
+    urls = result.get("urls", [])
+    liveness = result.get("liveness", {})
+
+    status_label = {
+        "confirmed": "🟢 Confirmed",
+        "contradicted": "🔴 Contradicted",
+        "inconclusive": "🟡 Inconclusive",
+    }.get(status, f"⚪ {status}")
+
+    if urls:
+        for u in urls[:2]:
+            st.markdown(f"[{u[:60]}]({u})")
+    if claim:
+        st.caption(f"Claim: {claim}")
+    st.markdown(f"**{status_label}**")
+
+    if liveness:
+        score = liveness.get("liveness_score")
+        if score is not None:
+            pct = int(score * 100)
+            bar = "🟢" if pct >= 60 else "🟡" if pct >= 30 else "🔴"
+            st.markdown(f"{bar} Liveness: **{pct}%**")
+        domain_age = liveness.get("domain_age_years")
+        if domain_age:
+            st.caption(f"Domain age: {domain_age} years")
+        indexation = liveness.get("search_indexed_pages")
+        if indexation:
+            st.caption(f"Indexed pages: {indexation}")
+        reviews = liveness.get("reviews", {})
+        if reviews:
+            parts = []
+            if reviews.get("trustpilot"):
+                parts.append(f"Trustpilot: {reviews['trustpilot']}")
+            if reviews.get("google"):
+                parts.append(f"Google: {reviews['google']}")
+            if parts:
+                st.caption(" | ".join(parts))
+        app_store = liveness.get("app_store")
+        if app_store and app_store.get("found"):
+            st.caption(f"App store: found ({app_store.get('platform', '')})")
+
+    if key_detail:
+        st.markdown(f"*{key_detail[:200]}*")
+    if evidence and evidence != key_detail:
+        st.caption(f"{evidence[:200]}")
+
+
+def _render_linkedin_check(result: dict):
+    """Render a LinkedIn profile verification finding."""
+    claim = result.get("claim", "")
+    status = result.get("status", "unknown")
+    evidence = result.get("evidence", "")
+    urls = result.get("urls", [])
+    depth = result.get("linkedin_depth", {})
+
+    status_label = {
+        "confirmed": "🟢 Confirmed",
+        "contradicted": "🔴 Contradicted",
+        "inconclusive": "🟡 Inconclusive",
+    }.get(status, f"⚪ {status}")
+
+    if urls:
+        for u in urls[:2]:
+            st.markdown(f"[{u[:60]}]({u})")
+    st.markdown(f"**{status_label}**")
+    if claim:
+        st.caption(f"Claim: {claim}")
+
+    if depth:
+        # Person info
+        headline = depth.get("headline", "")
+        connections = depth.get("connections_count")
+        location = depth.get("location", "")
+        activity = depth.get("activity_level", "")
+
+        if headline:
+            st.markdown(f"**{headline}**")
+        info_parts = []
+        if connections:
+            info_parts.append(f"{connections}+ connections")
+        if location:
+            info_parts.append(location)
+        if activity:
+            info_parts.append(f"Activity: {activity}")
+        if info_parts:
+            st.caption(" | ".join(info_parts))
+
+        # Company page
+        company_page = depth.get("company_page", {})
+        if company_page and company_page.get("found"):
+            cp_parts = []
+            if company_page.get("followers"):
+                cp_parts.append(f"{company_page['followers']} followers")
+            if company_page.get("employees"):
+                cp_parts.append(f"{company_page['employees']} employees")
+            if cp_parts:
+                st.caption(f"Company page: {' | '.join(cp_parts)}")
+
+    if evidence:
+        st.markdown(f"*{evidence[:250]}*")
 
 
 def _render_sanctions(result: dict):

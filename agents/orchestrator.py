@@ -736,7 +736,7 @@ Greet them briefly and ask your first question. ONE question only. No value judg
         return response
 
     def _store_investigation_findings(self):
-        """Store confirmed/contradicted investigation findings as case verifications."""
+        """Store ALL investigation findings as case verifications for UI display."""
         for inv in self.investigator.investigation_log:
             # Use timestamp as dedup key
             ts = inv.get("timestamp", "")
@@ -744,17 +744,31 @@ Greet them briefly and ask your first question. ONE question only. No value judg
                    for v in self.case.verifications):
                 continue
             for finding in inv.get("findings", []):
-                if finding.get("status") in ("confirmed", "contradicted"):
-                    self.case.verifications.append({
-                        "source": "background_investigation",
-                        "query": finding.get("search_query", ""),
-                        "result": {
-                            "claim": finding.get("claim", ""),
-                            "status": finding.get("status", ""),
-                            "evidence": finding.get("evidence", ""),
-                        },
-                        "timestamp": ts
-                    })
+                source_type = finding.get("source", "background_investigation")
+                result_data = {
+                    "claim": finding.get("claim", ""),
+                    "status": finding.get("status", ""),
+                    "evidence": finding.get("evidence", ""),
+                    "confidence": finding.get("confidence", ""),
+                }
+                # URL verification extras
+                if finding.get("liveness"):
+                    result_data["liveness"] = finding["liveness"]
+                if finding.get("key_detail"):
+                    result_data["key_detail"] = finding["key_detail"]
+                # LinkedIn extras
+                if finding.get("linkedin_depth"):
+                    result_data["linkedin_depth"] = finding["linkedin_depth"]
+                # URLs found
+                if finding.get("urls"):
+                    result_data["urls"] = finding["urls"]
+
+                self.case.verifications.append({
+                    "source": source_type,
+                    "query": finding.get("search_query", ""),
+                    "result": result_data,
+                    "timestamp": ts
+                })
 
     def _start_prefetch(self):
         """Start prefetching next question batch in background.
