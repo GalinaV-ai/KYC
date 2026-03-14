@@ -393,6 +393,9 @@ class KYCOrchestrator:
         self.paste_flags = []       # Paste/typing behavior flags
         # Background investigator — searches verifiable facts from answers
         self.investigator = BackgroundInvestigator()
+        # Background initial checks (person + company) — runs on first answer
+        self._initial_checks_thread = None
+        self._initial_check_results = None
         # Dynamic interview strategy — updated after each answer
         self.strategy = self._init_strategy()
         # Question budget — dynamic, adjusted by strategy
@@ -499,6 +502,46 @@ class KYCOrchestrator:
         self.case.save(self.case_file_path)
         self._initial_check_results = results
         return results
+
+    def run_initial_checks_background(self):
+        """Launch initial checks (person + company) in a background thread.
+        Called when the user answers the first question, so the interview
+        starts instantly and checks run in parallel.
+        """
+        if self._initial_checks_thread is not None:
+            return  # Already running or completed
+
+        person_name = self.case.person.full_name or ""
+        company_name = self.case.business.company_name or ""
+        if not person_name and not company_name:
+            return
+
+        def _run():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(
+                    self.run_initial_checks(person_name, company_name)
+                )
+            except Exception as e:
+                self._add_reasoning({
+                    "note": f"Background check error: {str(e)[:100]}",
+                    "suspicion": "none",
+                })
+            finally:
+                loop.close()
+
+        self._initial_checks_thread = threading.Thread(target=_run, daemon=True)
+        self._initial_checks_thread.start()
+
+    def collect_initial_checks(self):
+        """Non-blocking: if initial checks thread is done, make results available."""
+        if self._initial_checks_thread is None:
+            return
+        if not self._initial_checks_thread.is_alive():
+            self._initial_checks_thread.join(timeout=0.1)
+            # Results are already stored in self._initial_check_results
+            # and self.case.verifications by run_initial_checks()
 
     async def start_interview(self, business_stage: str = "") -> str:
         """Begin the business interview (personal details already collected).
@@ -638,6 +681,13 @@ Greet them briefly and ask your first question. ONE question only. No value judg
 
         self.answer_buffer.append(user_input)
 
+        # On first answer — launch initial checks (person + company) in background
+        if len(self.qa_log) == 1:
+            self.run_initial_checks_background()
+
+        # Collect initial check results if they've finished (non-blocking)
+        self.collect_initial_checks()
+
         # Start background tasks immediately (non-blocking)
         self._start_background_analysis(question, user_input)
         self._start_investigation(user_input)
@@ -665,6 +715,7 @@ Greet them briefly and ask your first question. ONE question only. No value judg
     async def _do_claude_batch_call(self, from_thread: bool = False) -> str:
         """Make a full Claude call with all buffered answers. No blocking waits."""
         # Collect any results that finished by now (non-blocking)
+        self.collect_initial_checks()
         self._collect_background_results()
         self.investigator.collect_results()
         self._store_investigation_findings()
@@ -1526,7 +1577,7 @@ PACING:
 - When all essential areas are covered and nothing suspicious remains: call complete_interview immediately.
 
 WHAT CUSTOMER HAS STATED SO FAR: {json.dumps(stated_data, ensure_ascii=False) if stated_data else "Nothing yet."}
-
+{self._get_precheck_context_for_haiku()}
 CONVERSATION SO FAR:
 {qa_summary}
 
@@ -1536,6 +1587,17 @@ INTERVIEW STRATEGY:
 Follow the strategy. Natural transition from their last answer, then your question(s) for the current FOCUS.
 
 CRITICAL — YOUR RESPONSE MUST NOT CONTAIN ANY OF THESE WORDS/PHRASES: "one more", "last question", "final question", "before we wrap", "before we finish", "to wrap up", "lastly", "to finish", "wrapping up", "winding down", "almost done", "nearly there", "just quickly". If you catch yourself writing any of these — DELETE and rewrite. Every question must sound like the MIDDLE of the conversation."""
+
+    def _get_precheck_context_for_haiku(self) -> str:
+        """Return precheck results for Haiku prompt — only if they've arrived."""
+        if not self._initial_check_results:
+            return ""
+        return f"""
+BACKGROUND CHECK RESULTS (INTERNAL — for comparing with customer answers AFTER they respond):
+{json.dumps(self._initial_check_results, ensure_ascii=False, default=str)[:3000]}
+
+RULES: This data is ONLY for cross-referencing with customer answers. NEVER hint you know anything. Ask blank-slate questions. Compare AFTER they answer. Do NOT call search_person/search_company again — already done.
+"""
 
     def _get_doc_suggestion_hint(self) -> str:
         """Return a document suggestion hint for the prompt, if any pending."""

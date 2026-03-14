@@ -110,10 +110,10 @@ def create_new_case(customer_name: str, company_name: str):
 
 # ─── Async handlers ───
 
-async def start_interview_with_checks():
+async def start_interview_fast():
+    """Start interview immediately — checks will run in background on first answer."""
     orch = st.session_state.orchestrator
     case = st.session_state.case
-    await orch.run_initial_checks(case.person.full_name or "", case.business.company_name or "")
     stage = st.session_state.get("business_stage", "existing")
     greeting = await orch.start_interview(business_stage=stage)
     st.session_state.messages.append({"role": "assistant", "content": greeting})
@@ -522,8 +522,8 @@ def render_chat(case):
 
     # Auto-start interview
     if not st.session_state.interview_started:
-        with st.spinner("Running checks and preparing interview..."):
-            asyncio.run(start_interview_with_checks())
+        with st.spinner("Preparing interview..."):
+            asyncio.run(start_interview_fast())
         st.rerun()
         return
 
