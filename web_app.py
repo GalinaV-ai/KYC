@@ -303,6 +303,7 @@ def _render_sidebar_verification(v: dict):
 
     # Icons and labels per source type
     source_map = {
+        # Legacy sources
         "person_search": ("👤", "Person Search"),
         "company_search": ("🏢", "Company Search"),
         "companies_house": ("🏛", "Companies House"),
@@ -310,6 +311,47 @@ def _render_sidebar_verification(v: dict):
         "background_investigation": ("🔎", "Fact Check"),
         "url_verification": ("🌐", "Website Check"),
         "linkedin_verification": ("💼", "LinkedIn Check"),
+        # Government registers
+        "fca_register": ("🏦", "FCA Register"),
+        "ico_register": ("🔒", "ICO Register"),
+        "charity_commission": ("💝", "Charity Commission"),
+        "disqualified_directors": ("⛔", "Disqualified Directors"),
+        "london_gazette": ("📰", "London Gazette"),
+        "insolvency_register": ("💸", "Insolvency Register"),
+        "food_hygiene": ("🍴", "Food Hygiene"),
+        "cqc_register": ("🏥", "CQC Register"),
+        "company_charges": ("⚖️", "Company Charges"),
+        "filing_compliance": ("📋", "Filing Compliance"),
+        "gambling_commission": ("🎰", "Gambling Commission"),
+        "hmrc_msb": ("💱", "HMRC MSB Register"),
+        "professional_body": ("🎓", "Professional Body"),
+        "adverse_media": ("📰", "Adverse Media"),
+        "address_density": ("📍", "Address Density"),
+        "postcode_validation": ("📮", "Postcode Check"),
+        # Digital footprint
+        "email_domain": ("📧", "Email Domain"),
+        "wayback_machine": ("🕰️", "Wayback Machine"),
+        "social_media": ("📱", "Social Media"),
+        "app_store": ("📲", "App Store"),
+        "github_presence": ("💻", "GitHub"),
+        "dns_geolocation": ("🌍", "DNS Geolocation"),
+        "ssl_certificate": ("🔐", "SSL Certificate"),
+        "director_history": ("👔", "Director History"),
+        "land_registry": ("🏠", "Land Registry"),
+        # Cross-reference
+        "timeline_consistency": ("📅", "Timeline Check"),
+        "financial_plausibility": ("💰", "Financial Plausibility"),
+        "network_analysis": ("🕸️", "Network Analysis"),
+        "company_accounts": ("📊", "Company Accounts"),
+        "fuzzy_name_match": ("🔤", "Name Match"),
+        # Existing tools
+        "domain_whois": ("🌐", "Domain WHOIS"),
+        "address_type": ("📍", "Address Type"),
+        "reviews": ("⭐", "Reviews"),
+        "vat_check": ("🧾", "VAT Check"),
+        "google_maps": ("🗺️", "Google Maps"),
+        "website_analysis": ("🔎", "Website Analysis"),
+        "linkedin_analysis": ("💼", "LinkedIn Analysis"),
     }
     icon, label = source_map.get(source, ("📋", source.replace("_", " ").title()))
 
@@ -349,11 +391,7 @@ def _render_sidebar_verification(v: dict):
         elif source == "linkedin_verification":
             _render_linkedin_check(result)
         else:
-            summary = result.get("summary", result.get("evidence", ""))
-            if summary:
-                st.markdown(f"*{summary}*")
-            else:
-                st.caption("Raw data available in case JSON")
+            _render_generic_check(result)
 
 
 def _render_fact_check(result: dict):
@@ -486,6 +524,54 @@ def _render_linkedin_check(result: dict):
 
     if evidence:
         st.markdown(f"*{evidence[:250]}*")
+
+
+def _render_generic_check(result: dict):
+    """Universal renderer for verification engine results."""
+    status = _safe_status(result.get("status", ""))
+    status_map = {
+        "found": "🟢 Found", "not_found": "⚪ Not found", "confirmed": "🟢 Confirmed",
+        "contradicted": "🔴 Contradicted", "inconclusive": "🟡 Inconclusive",
+        "clear": "🟢 Clear", "hit": "🔴 Hit", "warning": "🟡 Warning",
+        "registered": "🟢 Registered", "not_registered": "⚪ Not registered",
+        "compliant": "🟢 Compliant", "non_compliant": "🔴 Non-compliant",
+        "overdue": "🔴 Overdue", "error": "⚠️ Error",
+    }
+    if status:
+        st.markdown(f"**{status_map.get(status, status.replace('_', ' ').title())}**")
+
+    # Show summary/evidence/message — pick the first available text field
+    text = (result.get("summary") or result.get("evidence") or
+            result.get("message") or result.get("description") or "")
+    if isinstance(text, list):
+        text = "; ".join(str(t) for t in text[:5])
+    if text:
+        st.markdown(f"{str(text)[:400]}")
+
+    # Show key findings if present (lists like matches, issues, flags)
+    for list_key in ("findings", "issues", "matches", "warnings", "flags", "results"):
+        items = result.get(list_key, [])
+        if isinstance(items, list) and items:
+            st.markdown(f"**{list_key.title()}:**")
+            for item in items[:5]:
+                if isinstance(item, dict):
+                    desc = item.get("description") or item.get("name") or item.get("title") or str(item)
+                    st.markdown(f"  • {str(desc)[:120]}")
+                else:
+                    st.markdown(f"  • {str(item)[:120]}")
+            if len(items) > 5:
+                st.caption(f"...and {len(items) - 5} more")
+            break  # Only render one list
+
+    # Show numeric details (score, count, rating)
+    for num_key in ("score", "count", "rating", "confidence", "total"):
+        val = result.get(num_key)
+        if val is not None:
+            st.caption(f"{num_key.title()}: {val}")
+
+    # If result is basically empty (no text, no lists, no status), show a note
+    if not status and not text:
+        st.caption("No details returned")
 
 
 def _render_sanctions(result: dict):
@@ -638,13 +724,16 @@ def render_sidebar():
         st.markdown("### 🏦 KYC Agent")
 
         with st.expander("New Interview", expanded=st.session_state.case is None):
-            name = st.text_input("Customer name", key="new_name")
-            company = st.text_input("Company name", key="new_company")
-            biz_stage = st.radio(
-                "Stage", ["Existing business", "New business"],
-                key="new_biz_stage", horizontal=True,
-            )
-            if st.button("Start", type="primary", use_container_width=True):
+            with st.form("new_interview_form"):
+                name = st.text_input("Customer name", key="new_name")
+                company = st.text_input("Company name", key="new_company")
+                biz_stage = st.radio(
+                    "Stage", ["Existing business", "New business"],
+                    key="new_biz_stage", horizontal=True,
+                )
+                submitted = st.form_submit_button("Start", type="primary",
+                                                   use_container_width=True)
+            if submitted:
                 stage = "existing" if biz_stage == "Existing business" else "new"
                 if not name:
                     st.warning("Customer name is required")
@@ -703,6 +792,20 @@ def render_main():
         st.caption("Business verification for UK small business banking")
         st.info("👈 Fill in customer details to start.")
         return
+
+    # "Stop & assess" button — top-left, above chat
+    if not st.session_state.interview_complete and not st.session_state.risk_assessment:
+        stop_col, _ = st.columns([1, 4])
+        with stop_col:
+            if st.button("⏹ Stop & see result", type="secondary", use_container_width=True):
+                orch = st.session_state.orchestrator
+                orch.interview_complete = True
+                orch._add_reasoning({
+                    "note": "Interview stopped manually by the operator.",
+                    "suspicion": "none",
+                })
+                st.session_state.interview_complete = True
+                st.rerun()
 
     # Two-column layout: Chat + Reasoning
     chat_col, reasoning_col = st.columns([3, 2])
@@ -765,19 +868,6 @@ def render_chat(case):
             asyncio.run(run_assessment())
         st.rerun()
         return
-
-    # "Stop & assess" button
-    if not st.session_state.interview_complete:
-        if st.button("⏹ Stop interview & see result", type="secondary",
-                      use_container_width=True):
-            orch = st.session_state.orchestrator
-            orch.interview_complete = True
-            orch._add_reasoning({
-                "note": "Interview stopped manually by the operator.",
-                "suspicion": "none",
-            })
-            st.session_state.interview_complete = True
-            st.rerun()
 
     # Chat input with paste detection (timing heuristic)
     if not st.session_state.interview_complete:
