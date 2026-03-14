@@ -886,7 +886,9 @@ class VerificationEngine:
             "person_search": lambda p: search_person_online(
                 p.get("person_name", ""), p.get("company", ""), p.get("role", "")
             ),
-            "company_search": lambda p: search_company_online(p.get("company_name", ""), p.get("location", "")),
+            "company_search": lambda p: search_company_online(
+                p.get("company_name", ""), p.get("location", ""), p.get("owner_name", "")
+            ),
         }
 
         handler = dispatch_map.get(check_id)

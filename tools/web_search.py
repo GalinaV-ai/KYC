@@ -98,7 +98,13 @@ def _relevance_score(text: str, must_terms: list[str], boost_terms: list[str] = 
     if boost_terms:
         boost_hits = sum(1 for t in boost_terms if t.lower() in text_lower)
 
+    # Single common-word names (like "Leverage", "Focus", "Impact") need boost context
+    # to be considered "high" — otherwise every financial article matches
+    single_term = len(must_terms) == 1 and len(must_terms[0]) <= 15
+
     if must_ratio >= 0.8:
+        if single_term and boost_hits == 0:
+            return "medium"  # Single common word without context = medium at best
         return "high"
     elif must_ratio >= 0.5 or (must_ratio >= 0.3 and boost_hits >= 1):
         return "medium"

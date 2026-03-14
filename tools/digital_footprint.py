@@ -272,6 +272,24 @@ async def check_social_media_presence(
                     found = domain_check in href
 
                 if found:
+                    # Filter out platform homepages (not actual company profiles)
+                    homepage_patterns = [
+                        "instagram.com/$", "instagram.com/accounts",
+                        "facebook.com/$", "facebook.com/login",
+                        "twitter.com/$", "x.com/$", "x.com/X",
+                        "youtube.com/$", "youtube.com/feed",
+                        "tiktok.com/$", "tiktok.com/explore",
+                        "linkedin.com/$", "linkedin.com/feed",
+                    ]
+                    import re as _re
+                    is_homepage = any(_re.search(pat, href) for pat in homepage_patterns)
+                    # Also check if the business name appears in the title/snippet
+                    text_lower = f"{r.get('title', '')} {r.get('body', '')}".lower()
+                    name_lower = business_name.lower()
+                    name_in_result = name_lower in text_lower
+                    if is_homepage or not name_in_result:
+                        continue  # Skip generic platform pages
+
                     result["platforms_found"].append(platform)
                     result["details"][platform] = {
                         "url": r.get("href", ""),

@@ -34,8 +34,8 @@ class Interviewer:
         self._used_directives: list[dict] = []
 
         # Question budget
-        self._q_soft_target = 15
-        self._q_hard_max = 25
+        self._q_soft_target = 10
+        self._q_hard_max = 18
 
     def add_directives(self, directives: list[dict]):
         """Add probing directives from the Assessor."""
@@ -100,6 +100,20 @@ class Interviewer:
         if question:
             self.qa_log.append({"q": question, "a": customer_answer})
 
+        # Detect customer wants to stop
+        if self._customer_wants_to_stop(customer_answer):
+            self.interview_complete = True
+            self._add_reasoning({
+                "note": f"Customer signaled end of interview: '{customer_answer[:60]}'",
+                "suspicion": "none"
+            })
+            return (
+                "Thank you for your time. We have what we need to review your application. "
+                "We'll be in touch within a few business days.",
+                {"note": "Interview ended by customer signal", "suspicion": "none"},
+                None
+            )
+
         # Budget enforcement
         q_count = len(self.qa_log)
         if q_count >= self._q_hard_max:
@@ -161,28 +175,45 @@ class Interviewer:
         })
 
     def _get_active_directives(self) -> list[dict]:
-        """Get directives to include in the next turn."""
-        active = []
-        remaining = []
+        """Get ONE directive to include in the next turn.
 
-        for d in self._pending_directives:
-            urgency = d.get("urgency", "low")
-            if urgency in ("critical", "high"):
-                active.append(d)
-                self._used_directives.append(d)
-            elif urgency == "medium" and len(active) < 2:
-                active.append(d)
-                self._used_directives.append(d)
-            else:
-                remaining.append(d)
+        Only one directive per turn to prevent multi-question overload.
+        Priority: critical > high > medium > low.
+        """
+        if not self._pending_directives:
+            return []
 
-        # Also include one low-priority if there's room
-        if not active and remaining:
-            active.append(remaining.pop(0))
-            self._used_directives.append(active[-1])
+        # Take the highest-priority directive (list is already sorted)
+        chosen = self._pending_directives.pop(0)
+        self._used_directives.append(chosen)
+        return [chosen]
 
-        self._pending_directives = remaining
-        return active
+    @staticmethod
+    def _customer_wants_to_stop(answer: str) -> bool:
+        """Detect if the customer is signaling they want to end the interview."""
+        lower = answer.strip().lower()
+        # Direct stop signals
+        stop_phrases = [
+            "enough", "that's enough", "that's all", "i'm done", "i am done",
+            "no more question", "stop", "can we stop", "let's stop",
+            "i don't want to answer", "i'm not going to answer",
+            "this is over", "we're done", "i want to finish",
+            "enough please", "enough, please",
+        ]
+        for phrase in stop_phrases:
+            if phrase in lower:
+                return True
+
+        # Short farewell-only messages (customer responding to agent's closing)
+        farewell_only = [
+            "thank you", "thanks", "bye", "goodbye", "cheers", "ok thank",
+            "thank", "ok thanks", "okay thanks", "great thanks",
+        ]
+        stripped = lower.strip(" .!,")
+        if stripped in farewell_only or any(stripped == f for f in farewell_only):
+            return True
+
+        return False
 
     def _build_system_message(self) -> str:
         """Build the system message with current interview context."""

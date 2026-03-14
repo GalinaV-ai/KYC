@@ -327,21 +327,25 @@ async def check_london_gazette(name: str, is_company: bool = True) -> dict:
         except Exception as e:
             result["error"] = str(e)
 
-        # Always supplement with web search for broader coverage
+        # Supplement with web search, but only include results that mention the actual name
         try:
             gazette_search = await _search_ddg(
                 f'site:thegazette.co.uk "{name}" insolvency OR winding OR dissolution OR bankruptcy',
                 max_results=3
             )
+            name_lower = name.lower()
             for sr in gazette_search:
                 if isinstance(sr, dict) and "thegazette" in sr.get("href", ""):
-                    result["notices_found"] = True
-                    result["notices"].append({
-                        "source": "web_search",
-                        "title": sr.get("title", ""),
-                        "url": sr.get("href", ""),
-                        "snippet": sr.get("body", "")[:200]
-                    })
+                    # Verify the result actually mentions the company/person name
+                    text = f"{sr.get('title', '')} {sr.get('body', '')}".lower()
+                    if name_lower in text:
+                        result["notices_found"] = True
+                        result["notices"].append({
+                            "source": "web_search",
+                            "title": sr.get("title", ""),
+                            "url": sr.get("href", ""),
+                            "snippet": sr.get("body", "")[:200]
+                        })
         except Exception:
             pass
 

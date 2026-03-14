@@ -138,8 +138,8 @@ class KYCOrchestrator:
         # ── 5. Record Q&A and update state ──
         self.qa_log.append({"q": question_context, "a": user_input})
 
-        if reasoning:
-            self._add_reasoning(reasoning)
+        # NOTE: reasoning is already stored in interviewer.reasoning_log
+        # Don't duplicate it in orchestrator.reasoning_log
 
         if data_to_save:
             self._save_case_data(data_to_save)
