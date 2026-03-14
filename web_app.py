@@ -289,6 +289,12 @@ def render_score_bar(label: str, score: float, color: str = "#1976d2"):
 
 # ─── Verification rendering ───
 
+def _safe_status(raw) -> str:
+    """Normalize status field that may be str, list, or None."""
+    if isinstance(raw, list):
+        return str(raw[0]) if raw else ""
+    return str(raw) if raw else ""
+
 def _render_sidebar_verification(v: dict):
     """Render a single verification as a readable sidebar card."""
     source = v.get("source", "unknown")
@@ -311,7 +317,7 @@ def _render_sidebar_verification(v: dict):
     short_query = query[:50] + "…" if len(query) > 50 else query
 
     # Status-based coloring for investigation results
-    status = result.get("status", "") if isinstance(result, dict) else ""
+    status = _safe_status(result.get("status", "") if isinstance(result, dict) else "")
     status_indicator = {
         "confirmed": "🟢", "contradicted": "🔴", "inconclusive": "🟡",
         "partially_confirmed": "🟡", "not_found": "⚪",
@@ -353,7 +359,7 @@ def _render_sidebar_verification(v: dict):
 def _render_fact_check(result: dict):
     """Render a background fact-check finding."""
     claim = result.get("claim", "")
-    status = result.get("status", "unknown")
+    status = _safe_status(result.get("status", "unknown"))
     evidence = result.get("evidence", "")
     confidence = result.get("confidence", "")
 
@@ -377,7 +383,7 @@ def _render_fact_check(result: dict):
 def _render_url_check(result: dict):
     """Render a website/URL verification finding."""
     claim = result.get("claim", "")
-    status = result.get("status", "unknown")
+    status = _safe_status(result.get("status", "unknown"))
     evidence = result.get("evidence", "")
     key_detail = result.get("key_detail", "")
     urls = result.get("urls", [])
@@ -430,7 +436,7 @@ def _render_url_check(result: dict):
 def _render_linkedin_check(result: dict):
     """Render a LinkedIn profile verification finding."""
     claim = result.get("claim", "")
-    status = result.get("status", "unknown")
+    status = _safe_status(result.get("status", "unknown"))
     evidence = result.get("evidence", "")
     urls = result.get("urls", [])
     depth = result.get("linkedin_depth", {})
@@ -489,7 +495,7 @@ def _render_sanctions(result: dict):
         if not entity:
             continue
         name = entity.get("name", entity_type)
-        status = entity.get("status", "unknown")
+        status = _safe_status(entity.get("status", "unknown"))
         status_icon = {"clear": "🟢", "hit": "🔴", "possible_match": "🟡"}.get(status, "⚪")
         st.markdown(f"{status_icon} **{name}**: {status}")
 
