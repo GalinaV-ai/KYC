@@ -311,19 +311,22 @@ async def check_london_gazette(name: str, is_company: bool = True) -> dict:
                             })
                 else:
                     # HTML response — parse for key indicators
+                    # Only flag if the entity name actually appears in the HTML
                     html = resp.text.lower()
-                    danger_keywords = [
-                        "winding-up", "winding up", "liquidation", "dissolution",
-                        "bankruptcy", "insolvency", "struck off", "compulsory",
-                        "administration order", "voluntary arrangement"
-                    ]
-                    for kw in danger_keywords:
-                        if kw in html:
-                            result["notices_found"] = True
-                            result["notices"].append({
-                                "type": kw,
-                                "note": f"'{kw}' found in Gazette search results"
-                            })
+                    name_lower = name.lower()
+                    if name_lower in html:
+                        danger_keywords = [
+                            "winding-up", "winding up", "liquidation", "dissolution",
+                            "bankruptcy", "insolvency", "struck off", "compulsory",
+                            "administration order", "voluntary arrangement"
+                        ]
+                        for kw in danger_keywords:
+                            if kw in html:
+                                result["notices_found"] = True
+                                result["notices"].append({
+                                    "type": kw,
+                                    "note": f"'{kw}' found in Gazette search results for '{name}'"
+                                })
         except Exception as e:
             result["error"] = str(e)
 

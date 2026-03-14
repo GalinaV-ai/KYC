@@ -548,6 +548,40 @@ class VerificationEngine:
         self._collected_financials: dict = {}  # For financial plausibility
         self._director_appointments: list = []  # For network analysis
 
+    def _dedup_key(self, check_id: str, params: dict) -> str:
+        """Generate a deduplication key from check_id + sorted params."""
+        # Normalize params: lowercase string values, sort keys
+        norm = {}
+        for k, v in sorted(params.items()):
+            if isinstance(v, str):
+                norm[k] = v.strip().lower()
+            else:
+                norm[k] = v
+        return f"{check_id}::{json.dumps(norm, sort_keys=True)}"
+
+    def _dedup_planned(self, planned: list[dict]) -> list[dict]:
+        """Remove checks that have already been completed with the same params."""
+        # Build set of already-completed keys
+        completed_keys = set()
+        for cc in self.completed_checks:
+            cid = cc.get("check_id", "")
+            cparams = cc.get("params", {})
+            completed_keys.add(self._dedup_key(cid, cparams))
+
+        # Also dedup within the planned list itself
+        seen = set()
+        deduped = []
+        for check in planned:
+            key = self._dedup_key(check.get("check_id", ""), check.get("params", {}))
+            if key not in completed_keys and key not in seen:
+                seen.add(key)
+                deduped.append(check)
+
+        skipped = len(planned) - len(deduped)
+        if skipped:
+            print(f"[VerificationEngine] Dedup: skipped {skipped} duplicate checks")
+        return deduped
+
     async def plan_checks(
         self,
         facts: list[dict],
@@ -565,11 +599,12 @@ class VerificationEngine:
                 f"(relevant for: {', '.join(info['relevant_for'])})\n"
             )
 
-        # Build completed checks summary
+        # Build completed checks summary — include params for better dedup by LLM
         completed_summary = ""
         if self.completed_checks:
             for cc in self.completed_checks[-30:]:  # Last 30 checks
-                completed_summary += f"- {cc.get('check_id', '')} → {cc.get('status', '')}\n"
+                params_str = ", ".join(f"{k}={v}" for k, v in cc.get("params", {}).items())
+                completed_summary += f"- {cc.get('check_id', '')}({params_str}) → {cc.get('status', '')}\n"
         else:
             completed_summary = "None yet."
 
@@ -595,7 +630,7 @@ class VerificationEngine:
                     text = text[4:]
             planned = json.loads(text)
             if isinstance(planned, list):
-                return planned
+                return self._dedup_planned(planned)
         except Exception as e:
             print(f"[VerificationEngine] Routing error: {e}")
             # Fallback to rule-based routing
@@ -618,16 +653,21 @@ class VerificationEngine:
         company_number = business_context.get("company_number", "")
         industry = business_context.get("industry", "").lower()
 
-        completed_ids = {c["check_id"] for c in self.completed_checks}
+        # Build dedup keys from completed checks (check_id + params)
+        completed_keys = set()
+        for cc in self.completed_checks:
+            completed_keys.add(self._dedup_key(cc.get("check_id", ""), cc.get("params", {})))
 
         def add(check_id, params, priority="medium", reason=""):
-            if check_id not in completed_ids:
+            key = self._dedup_key(check_id, params)
+            if key not in completed_keys:
                 planned.append({
                     "check_id": check_id,
                     "params": params,
                     "priority": priority,
                     "reason": reason,
                 })
+                completed_keys.add(key)  # Prevent intra-batch duplicates
 
         # ── Mandatory checks ──
         if person_name:

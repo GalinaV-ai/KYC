@@ -114,12 +114,16 @@ class Interviewer:
                 None
             )
 
-        # Budget enforcement
+        # Budget enforcement — extend if high-priority directives remain
         q_count = len(self.qa_log)
-        if q_count >= self._q_hard_max:
+        pending_critical = sum(1 for d in self._pending_directives
+                               if d.get("urgency") in ("critical", "high"))
+        effective_hard_max = self._q_hard_max + min(pending_critical, 4)  # up to 4 extra
+
+        if q_count >= effective_hard_max:
             self.interview_complete = True
             self._add_reasoning({
-                "note": f"Interview auto-completed: {q_count} questions reached hard max.",
+                "note": f"Interview auto-completed: {q_count} questions reached max ({effective_hard_max}).",
                 "suspicion": "none"
             })
             return "Thank you for your time. I have all the information I need to proceed with the assessment."
@@ -132,6 +136,7 @@ class Interviewer:
         if active_directives:
             directives_text = "\n".join(
                 f"- [{d['urgency'].upper()}] {d['directive']}"
+                + (f" (desired answer: {d['desired_answer_type']})" if d.get('desired_answer_type') else "")
                 for d in active_directives
             )
             user_content += (
@@ -222,17 +227,18 @@ class Interviewer:
         q_count = len(self.qa_log)
         budget = self._q_soft_target
 
+        # Count pending high-priority directives
+        pending_high = sum(1 for d in self._pending_directives if d.get("urgency") in ("critical", "high"))
+
         parts.append(f"\n\nINTERVIEW STATUS:")
         parts.append(f"Questions asked so far: {q_count}")
         parts.append(f"Target: {budget} questions (max {self._q_hard_max})")
 
-        if q_count >= budget - 3:
-            parts.append("You are near the end of your budget. Start wrapping up — cover any remaining essentials and prepare to complete.")
-
-        # Include pending directive count
-        pending_high = sum(1 for d in self._pending_directives if d.get("urgency") in ("critical", "high"))
         if pending_high:
-            parts.append(f"\nPENDING HIGH-PRIORITY DIRECTIVES: {pending_high} — address these before completing.")
+            parts.append(f"\nPENDING HIGH-PRIORITY DIRECTIVES: {pending_high}")
+            parts.append("DO NOT wrap up or finish the interview while high-priority directives remain. Budget has been extended.")
+        elif q_count >= budget - 3:
+            parts.append("You are near the end of your budget. Start wrapping up — cover any remaining essentials and prepare to complete.")
 
         return "\n".join(parts)
 
