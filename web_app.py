@@ -295,6 +295,30 @@ def _safe_status(raw) -> str:
         return str(raw[0]) if raw else ""
     return str(raw) if raw else ""
 
+def _has_displayable_content(result: dict) -> bool:
+    """Check if a verification result has any meaningful data to show."""
+    if not isinstance(result, dict):
+        return False
+    # Has a meaningful status (not empty, not just "error")
+    status = _safe_status(result.get("status", ""))
+    if status and status != "error":
+        return True
+    # Has text content
+    for key in ("summary", "evidence", "message", "description", "claim"):
+        val = result.get(key)
+        if val and (isinstance(val, str) and val.strip()):
+            return True
+    # Has list data
+    for key in ("findings", "issues", "matches", "warnings", "flags", "results"):
+        val = result.get(key)
+        if isinstance(val, list) and val:
+            return True
+    # Has nested dicts with data (sanctions, companies_house, etc.)
+    for key in ("person", "company", "profile", "officers"):
+        if result.get(key):
+            return True
+    return False
+
 def _render_sidebar_verification(v: dict):
     """Render a single verification as a readable sidebar card."""
     source = v.get("source", "unknown")
@@ -370,6 +394,12 @@ def _render_sidebar_verification(v: dict):
         expander_title += f": {short_query}"
     if status_indicator:
         expander_title = f"{status_indicator} {expander_title}"
+
+    # Skip checks with no displayable content
+    legacy_sources = {"sanctions", "companies_house", "person_search", "company_search",
+                      "background_investigation", "url_verification", "linkedin_verification"}
+    if source not in legacy_sources and not _has_displayable_content(result):
+        return
 
     with st.expander(expander_title, expanded=False):
         if not isinstance(result, dict):
@@ -569,9 +599,7 @@ def _render_generic_check(result: dict):
         if val is not None:
             st.caption(f"{num_key.title()}: {val}")
 
-    # If result is basically empty (no text, no lists, no status), show a note
-    if not status and not text:
-        st.caption("No details returned")
+    # Empty results are now filtered out before rendering (see _has_displayable_content)
 
 
 def _render_sanctions(result: dict):
