@@ -540,3 +540,528 @@ async def deep_analyze_linkedin(linkedin_url: str) -> dict:
                                f"This is common for very small businesses but worth noting."
 
     return result
+
+
+# ─── Website Liveness Analysis ───
+
+
+async def analyze_website_liveness(url: str) -> dict:
+    """
+    Deep "liveness" analysis of a website — goes beyond basic reachability.
+
+    Checks:
+    1. Domain age via Wayback Machine (Internet Archive)
+    2. Number of indexed pages (via search engine)
+    3. Content freshness (dates on the page)
+    4. External reviews (Trustpilot, Google)
+    5. App store presence (if applicable)
+
+    Returns a liveness_score (0-1) and structured findings.
+    """
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    parsed = urlparse(url)
+    domain = parsed.netloc.replace("www.", "")
+
+    result = {
+        "url": url,
+        "domain": domain,
+        "liveness_score": 0.0,
+        "domain_age": None,
+        "indexed_pages": None,
+        "content_freshness": None,
+        "reviews": {},
+        "app_store": {},
+        "signals": [],
+        "red_flags": [],
+        "summary": ""
+    }
+
+    score_points = 0
+    max_points = 0
+
+    import asyncio
+
+    # Run all checks in parallel
+    tasks = {
+        "wayback": _check_wayback_machine(domain),
+        "indexation": _check_search_indexation(domain),
+        "reviews": _check_external_reviews(domain),
+        "app_store": _check_app_store_presence(domain),
+    }
+    all_results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+    checks = {}
+    for key, res in zip(tasks.keys(), all_results):
+        checks[key] = res if not isinstance(res, Exception) else {}
+
+    # ── 1. Domain age (Wayback Machine) ──
+    max_points += 20
+    wb = checks.get("wayback", {})
+    if wb.get("first_snapshot"):
+        result["domain_age"] = wb
+        first = wb["first_snapshot"]
+        total_snapshots = wb.get("total_snapshots", 0)
+
+        try:
+            first_year = int(first[:4])
+            current_year = datetime.now().year
+            age = current_year - first_year
+
+            if age >= 5:
+                score_points += 20
+                result["signals"].append(f"Domain first seen {age} years ago ({first[:10]}) — well-established")
+            elif age >= 2:
+                score_points += 15
+                result["signals"].append(f"Domain first seen {age} years ago ({first[:10]})")
+            elif age >= 1:
+                score_points += 8
+                result["signals"].append(f"Domain first seen ~{age} year ago ({first[:10]})")
+            else:
+                score_points += 3
+                result["red_flags"].append(f"Domain very new — first seen {first[:10]}")
+        except (ValueError, IndexError):
+            pass
+
+        if total_snapshots > 100:
+            score_points += 5
+            result["signals"].append(f"{total_snapshots} Wayback Machine snapshots — actively maintained")
+        elif total_snapshots > 10:
+            score_points += 2
+            result["signals"].append(f"{total_snapshots} Wayback Machine snapshots")
+        elif total_snapshots <= 3:
+            result["red_flags"].append(f"Only {total_snapshots} Wayback snapshots — minimal web history")
+    else:
+        result["red_flags"].append("Not found in Wayback Machine — domain may be very new or obscure")
+
+    # ── 2. Search indexation ──
+    max_points += 20
+    idx = checks.get("indexation", {})
+    indexed_count = idx.get("indexed_pages", 0)
+    result["indexed_pages"] = idx
+
+    if indexed_count >= 50:
+        score_points += 20
+        result["signals"].append(f"{indexed_count}+ pages indexed by search engines — substantial site")
+    elif indexed_count >= 10:
+        score_points += 12
+        result["signals"].append(f"{indexed_count} pages indexed")
+    elif indexed_count >= 3:
+        score_points += 5
+        result["signals"].append(f"Only {indexed_count} pages indexed — small or new site")
+    elif indexed_count == 0:
+        result["red_flags"].append("Zero pages indexed — site may be brand new, blocked, or fake")
+
+    if idx.get("brand_mentions", 0) > 0:
+        result["signals"].append(f"{idx['brand_mentions']} third-party mentions of the brand found")
+        score_points += min(5, idx["brand_mentions"])
+
+    # ── 3. External reviews ──
+    max_points += 20
+    rev = checks.get("reviews", {})
+    result["reviews"] = rev
+
+    trustpilot = rev.get("trustpilot", {})
+    google_reviews = rev.get("google", {})
+
+    if trustpilot.get("found"):
+        score_points += 10
+        result["signals"].append(f"Trustpilot listing found: {trustpilot.get('snippet', '')[:80]}")
+    if google_reviews.get("found"):
+        score_points += 10
+        result["signals"].append(f"Google reviews found: {google_reviews.get('snippet', '')[:80]}")
+
+    if not trustpilot.get("found") and not google_reviews.get("found"):
+        result["signals"].append("No external reviews found (common for small/new businesses)")
+
+    # ── 4. App store ──
+    max_points += 10
+    app = checks.get("app_store", {})
+    result["app_store"] = app
+
+    if app.get("ios_found") or app.get("android_found"):
+        score_points += 10
+        platforms = []
+        if app.get("ios_found"):
+            platforms.append("iOS")
+        if app.get("android_found"):
+            platforms.append("Android")
+        result["signals"].append(f"App found on {', '.join(platforms)} — real product investment")
+
+    # ── 5. Content freshness ──
+    max_points += 10
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=12) as client:
+            resp = await client.get(url)
+            if resp.status_code < 400:
+                html = resp.text
+                current_year = datetime.now().year
+
+                recent_year_count = len(re.findall(str(current_year), html))
+                last_year_count = len(re.findall(str(current_year - 1), html))
+
+                result["content_freshness"] = {
+                    "current_year_mentions": recent_year_count,
+                    "last_year_mentions": last_year_count,
+                }
+
+                if recent_year_count >= 3:
+                    score_points += 10
+                    result["signals"].append(f"Content references {current_year} ({recent_year_count} times) — actively updated")
+                elif last_year_count >= 3:
+                    score_points += 5
+                    result["signals"].append("Content references last year — reasonably fresh")
+                elif recent_year_count == 0 and last_year_count == 0:
+                    old_years = sum(len(re.findall(str(y), html)) for y in range(current_year - 5, current_year - 1))
+                    if old_years > 5:
+                        result["red_flags"].append("No recent dates found — content may be stale")
+    except Exception:
+        pass
+
+    # ── Final score ──
+    result["liveness_score"] = round(score_points / max_points, 2) if max_points > 0 else 0
+
+    score = result["liveness_score"]
+    if score >= 0.7:
+        result["summary"] = f"Website shows strong liveness signals (score: {score:.0%}). " \
+                           f"Domain has history, content is indexed, and external presence detected."
+    elif score >= 0.4:
+        result["summary"] = f"Website has moderate liveness signals (score: {score:.0%}). " \
+                           f"Some indicators present but gaps exist."
+    else:
+        result["summary"] = f"Website has weak liveness signals (score: {score:.0%}). " \
+                           f"{len(result['red_flags'])} concerns. May be new, unused, or fabricated."
+
+    return result
+
+
+async def _check_wayback_machine(domain: str) -> dict:
+    """Check Internet Archive for domain history — free, no key."""
+    result = {"first_snapshot": None, "last_snapshot": None, "total_snapshots": 0}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            # CDX API — returns snapshot timestamps
+            resp = await client.get(
+                "https://web.archive.org/cdx/search/cdx",
+                params={
+                    "url": domain,
+                    "output": "json",
+                    "fl": "timestamp",
+                    "limit": 5,
+                    "collapse": "timestamp:6",
+                }
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if len(data) > 1:
+                    timestamps = [row[0] for row in data[1:]]
+                    result["first_snapshot"] = timestamps[0]
+                    result["last_snapshot"] = timestamps[-1]
+
+            # Get total count
+            resp2 = await client.get(
+                "https://web.archive.org/cdx/search/cdx",
+                params={
+                    "url": domain,
+                    "output": "json",
+                    "fl": "timestamp",
+                    "limit": 1,
+                    "showNumPages": "true",
+                }
+            )
+            if resp2.status_code == 200:
+                try:
+                    result["total_snapshots"] = int(resp2.text.strip())
+                except ValueError:
+                    pass
+    except Exception:
+        pass
+    return result
+
+
+async def _check_search_indexation(domain: str) -> dict:
+    """Check how many pages are indexed via search."""
+    result = {"indexed_pages": 0, "brand_mentions": 0}
+    try:
+        site_results = await _search_ddg(f"site:{domain}", max_results=10)
+        valid = [r for r in site_results if "error" not in r]
+        result["indexed_pages"] = len(valid)
+
+        brand = domain.split(".")[0]
+        if len(brand) > 3:
+            mention_results = await _search_ddg(f'"{brand}" -{domain}', max_results=5)
+            valid_mentions = [r for r in mention_results if "error" not in r
+                            and domain not in r.get("href", "")]
+            result["brand_mentions"] = len(valid_mentions)
+    except Exception:
+        pass
+    return result
+
+
+async def _check_external_reviews(domain: str) -> dict:
+    """Check for reviews on Trustpilot and Google."""
+    result = {"trustpilot": {"found": False}, "google": {"found": False}}
+    try:
+        import asyncio
+        tp_task = _search_ddg(f"site:trustpilot.com {domain}", max_results=2)
+        gr_task = _search_ddg(f'"{domain}" reviews OR review', max_results=3)
+        tp_raw, gr_raw = await asyncio.gather(tp_task, gr_task, return_exceptions=True)
+
+        if not isinstance(tp_raw, Exception):
+            tp_valid = [r for r in tp_raw if "error" not in r and "trustpilot" in r.get("href", "")]
+            if tp_valid:
+                result["trustpilot"] = {
+                    "found": True,
+                    "url": tp_valid[0].get("href", ""),
+                    "snippet": tp_valid[0].get("body", "")[:150],
+                }
+
+        if not isinstance(gr_raw, Exception):
+            gr_valid = [r for r in gr_raw if "error" not in r and "review" in r.get("body", "").lower()]
+            if gr_valid:
+                result["google"] = {
+                    "found": True,
+                    "snippet": gr_valid[0].get("body", "")[:150],
+                    "url": gr_valid[0].get("href", ""),
+                }
+    except Exception:
+        pass
+    return result
+
+
+async def _check_app_store_presence(domain: str) -> dict:
+    """Check if the brand has apps on iOS/Android stores."""
+    result = {"ios_found": False, "android_found": False}
+    brand = domain.split(".")[0]
+    if len(brand) < 4:
+        return result
+    try:
+        import asyncio
+        ios_task = _search_ddg(f'site:apps.apple.com "{brand}"', max_results=2)
+        and_task = _search_ddg(f'site:play.google.com "{brand}"', max_results=2)
+        ios_raw, and_raw = await asyncio.gather(ios_task, and_task, return_exceptions=True)
+
+        if not isinstance(ios_raw, Exception):
+            ios_valid = [r for r in ios_raw if "error" not in r and "apps.apple.com" in r.get("href", "")]
+            if ios_valid:
+                result["ios_found"] = True
+                result["ios_url"] = ios_valid[0].get("href", "")
+                result["ios_title"] = ios_valid[0].get("title", "")
+
+        if not isinstance(and_raw, Exception):
+            and_valid = [r for r in and_raw if "error" not in r and "play.google.com" in r.get("href", "")]
+            if and_valid:
+                result["android_found"] = True
+                result["android_url"] = and_valid[0].get("href", "")
+                result["android_title"] = and_valid[0].get("title", "")
+    except Exception:
+        pass
+    return result
+
+
+# ─── Enhanced LinkedIn Analysis ───
+
+
+async def analyze_linkedin_depth(search_name: str, business_name: str = "") -> dict:
+    """
+    Deep LinkedIn analysis using search snippets.
+
+    Extracts from DuckDuckGo snippets of LinkedIn pages:
+    - Connection count (e.g. "500+ connections")
+    - Headline / current title
+    - Location
+    - Activity level (posts, articles)
+    - Profile completeness signals
+    - Company page: followers, employee count
+    """
+    result = {
+        "person": search_name,
+        "business": business_name,
+        "connections": None,
+        "headline": None,
+        "location": None,
+        "current_role": None,
+        "activity_signals": [],
+        "profile_completeness": "unknown",
+        "company_page": {},
+        "reliability_score": 0.0,
+        "signals": [],
+        "red_flags": [],
+        "raw_snippets": [],
+        "summary": ""
+    }
+
+    import asyncio
+    score_points = 0
+    max_points = 0
+
+    # Run targeted searches in parallel
+    queries = {}
+    queries["profile"] = _search_ddg(
+        f'site:linkedin.com/in "{search_name}"', max_results=5
+    )
+    queries["activity"] = _search_ddg(
+        f'site:linkedin.com "{search_name}" posted OR shared OR published', max_results=3
+    )
+    if business_name:
+        queries["company_page"] = _search_ddg(
+            f'site:linkedin.com/company "{business_name}"', max_results=3
+        )
+        queries["person_company"] = _search_ddg(
+            f'site:linkedin.com "{search_name}" "{business_name}"', max_results=3
+        )
+
+    all_raw = await asyncio.gather(*queries.values(), return_exceptions=True)
+    search_data = {}
+    for key, raw in zip(queries.keys(), all_raw):
+        search_data[key] = raw if not isinstance(raw, Exception) else []
+
+    # ── Parse profile snippets ──
+    max_points += 30
+    profile_results = [r for r in search_data.get("profile", [])
+                       if "error" not in r and "linkedin.com/in/" in r.get("href", "")]
+
+    if profile_results:
+        score_points += 10
+        result["signals"].append("LinkedIn personal profile found")
+
+        for r in profile_results[:3]:
+            title = r.get("title", "")
+            snippet = r.get("body", "")
+            combined = f"{title} {snippet}"
+            result["raw_snippets"].append({"title": title, "snippet": snippet[:200]})
+
+            # Extract headline (usually: "Name - Headline | LinkedIn")
+            title_parts = title.split(" - ", 1)
+            if len(title_parts) > 1:
+                headline = title_parts[1].replace(" | LinkedIn", "").strip()
+                if headline and not result["headline"]:
+                    result["headline"] = headline
+                    score_points += 5
+                    result["signals"].append(f"Headline: {headline[:80]}")
+
+            # Extract connections count
+            conn_match = re.search(r'(\d+)\+?\s*(?:connections?|контакт|связ)', combined, re.IGNORECASE)
+            if conn_match and not result["connections"]:
+                count = int(conn_match.group(1))
+                result["connections"] = count
+                if count >= 500:
+                    score_points += 10
+                    result["signals"].append(f"{count}+ connections — well-networked")
+                elif count >= 100:
+                    score_points += 5
+                    result["signals"].append(f"{count}+ connections")
+                elif count < 50:
+                    result["red_flags"].append(f"Only {count} connections — possibly new or inactive")
+
+            # Extract location
+            loc_match = re.search(
+                r'(?:location|based in|from)\s*[:\-]?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z][a-z]+)*)',
+                combined
+            )
+            if loc_match and not result["location"]:
+                result["location"] = loc_match.group(1)
+
+            # Extract current role
+            role_match = re.search(
+                r'(?:CEO|CTO|CFO|COO|Director|Founder|Co-founder|Owner|Manager|Partner|Head of)\s+(?:at|of|@)\s+([^\|,\-]+)',
+                combined, re.IGNORECASE
+            )
+            if role_match and not result["current_role"]:
+                result["current_role"] = role_match.group(0).strip()[:100]
+                score_points += 5
+    else:
+        result["red_flags"].append("No LinkedIn personal profile found")
+
+    # ── Parse activity ──
+    max_points += 15
+    activity_results = [r for r in search_data.get("activity", [])
+                        if "error" not in r and "linkedin.com" in r.get("href", "")]
+
+    if activity_results:
+        score_points += 10
+        result["activity_signals"].append(f"{len(activity_results)} posts/shares found")
+        result["signals"].append("Active on LinkedIn (posts/shares found)")
+
+        for r in activity_results[:3]:
+            snippet = r.get("body", "")
+            if any(kw in snippet.lower() for kw in ["2026", "2025", "week", "day", "month", "hour"]):
+                score_points += 5
+                result["signals"].append("Recent LinkedIn activity detected")
+                break
+    else:
+        result["signals"].append("No public LinkedIn posts found")
+
+    # ── Parse company page ──
+    max_points += 15
+    if business_name:
+        company_results = [r for r in search_data.get("company_page", [])
+                           if "error" not in r and "linkedin.com/company" in r.get("href", "")]
+        if company_results:
+            score_points += 5
+            result["company_page"]["found"] = True
+            for r in company_results[:2]:
+                title = r.get("title", "")
+                snippet = r.get("body", "")
+                combined = f"{title} {snippet}"
+
+                foll_match = re.search(r'(\d[\d,]*)\s*(?:followers?|подписчик)', combined, re.IGNORECASE)
+                if foll_match:
+                    try:
+                        result["company_page"]["followers"] = int(foll_match.group(1).replace(",", ""))
+                        score_points += 5
+                    except ValueError:
+                        pass
+
+                emp_match = re.search(r'(\d[\d,]*)\s*(?:employees?|сотрудник|people|associated members)', combined, re.IGNORECASE)
+                if emp_match:
+                    try:
+                        result["company_page"]["employees"] = int(emp_match.group(1).replace(",", ""))
+                        score_points += 5
+                    except ValueError:
+                        pass
+
+                result["company_page"]["snippet"] = snippet[:150]
+        else:
+            result["company_page"]["found"] = False
+            result["signals"].append(f"No LinkedIn company page for '{business_name}'")
+
+    # ── Person+Company cross-reference ──
+    max_points += 10
+    if business_name:
+        cross_results = [r for r in search_data.get("person_company", []) if "error" not in r]
+        if cross_results:
+            score_points += 10
+            result["signals"].append("Person and company appear together on LinkedIn — confirms association")
+        else:
+            result["red_flags"].append(f"'{search_name}' and '{business_name}' not found together on LinkedIn")
+
+    # ── Profile completeness ──
+    completeness_score = sum([
+        bool(result["headline"]),
+        bool(result["connections"] and result["connections"] >= 50),
+        bool(result["current_role"]),
+        bool(result["activity_signals"]),
+    ])
+    result["profile_completeness"] = (
+        "strong" if completeness_score >= 3 else
+        "moderate" if completeness_score >= 2 else
+        "weak" if completeness_score >= 1 else "not_found"
+    )
+
+    # ── Final score ──
+    result["reliability_score"] = round(score_points / max_points, 2) if max_points > 0 else 0
+    score = result["reliability_score"]
+
+    if score >= 0.6:
+        result["summary"] = f"LinkedIn presence is solid (score: {score:.0%}). " \
+                           f"Profile {result['profile_completeness']}, " \
+                           f"{result.get('connections', '?')} connections."
+    elif score >= 0.3:
+        result["summary"] = f"LinkedIn presence is limited (score: {score:.0%}). " \
+                           f"Profile exists but signals are weak."
+    else:
+        result["summary"] = f"LinkedIn presence is very weak or absent (score: {score:.0%}). " \
+                           f"Warrants further verification."
+
+    return result

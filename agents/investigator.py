@@ -16,6 +16,7 @@ import anthropic
 import httpx
 
 from tools import web_search, verification, companies_house
+from tools import web_analysis
 
 
 # ─── Sanctions checking ───
@@ -1111,7 +1112,7 @@ Return JSON only:
         return finding
 
     async def _verify_url(self, client, fact: dict, url: str) -> dict:
-        """Verify a URL by fetching and analyzing it."""
+        """Verify a URL: deep website analysis + liveness check in parallel."""
         finding = {
             "claim": fact.get("claim", ""),
             "type": "url",
@@ -1121,31 +1122,92 @@ Return JSON only:
             "confidence": "low",
             "evidence": "",
             "key_detail": "",
-            "urls": [url]
+            "urls": [url],
+            "liveness": {},
         }
 
         try:
-            # Normalize URL
             if not url.startswith("http"):
                 url = "https://" + url
 
-            analysis = await web_analysis.deep_analyze_website(url)
-            if analysis and not analysis.get("error"):
-                finding["status"] = "confirmed"
-                finding["confidence"] = "high"
-                finding["evidence"] = f"URL is live. {analysis.get('summary', '')}"
-                finding["key_detail"] = analysis.get("summary", "Website exists and is accessible")
+            # Run both analyses in parallel
+            site_task = web_analysis.deep_analyze_website(url)
+            liveness_task = web_analysis.analyze_website_liveness(url)
+            site_result, liveness_result = await asyncio.gather(
+                site_task, liveness_task, return_exceptions=True
+            )
+
+            parts = []
+
+            # Website structure analysis
+            if isinstance(site_result, dict) and not site_result.get("error"):
+                site_score = site_result.get("reliability_score", 0)
+                parts.append(f"Structure: {site_result.get('summary', '')}")
             else:
-                error = analysis.get("error", "Unknown error")
-                finding["evidence"] = f"URL could not be accessed: {error}"
+                site_score = 0
+                error = site_result.get("error", str(site_result)) if isinstance(site_result, dict) else str(site_result)
+                parts.append(f"Website unreachable: {str(error)[:100]}")
+
+            # Liveness analysis
+            if isinstance(liveness_result, dict):
+                finding["liveness"] = liveness_result
+                liveness_score = liveness_result.get("liveness_score", 0)
+                parts.append(f"Liveness: {liveness_result.get('summary', '')}")
+
+                # Include key liveness signals
+                for sig in liveness_result.get("signals", [])[:3]:
+                    parts.append(f"  + {sig}")
+                for flag in liveness_result.get("red_flags", [])[:2]:
+                    parts.append(f"  ! {flag}")
+
+                # Domain age detail
+                if liveness_result.get("domain_age", {}).get("first_snapshot"):
+                    finding["key_detail"] = f"Domain first seen: {liveness_result['domain_age']['first_snapshot'][:10]}, " \
+                                           f"{liveness_result['domain_age'].get('total_snapshots', 0)} archive snapshots"
+
+                # Reviews detail
+                reviews = liveness_result.get("reviews", {})
+                if reviews.get("trustpilot", {}).get("found"):
+                    parts.append(f"  + Trustpilot: {reviews['trustpilot'].get('snippet', '')[:80]}")
+                if reviews.get("google", {}).get("found"):
+                    parts.append(f"  + Reviews: {reviews['google'].get('snippet', '')[:80]}")
+
+                # App store
+                app = liveness_result.get("app_store", {})
+                if app.get("ios_found") or app.get("android_found"):
+                    app_names = []
+                    if app.get("ios_found"):
+                        app_names.append(f"iOS: {app.get('ios_title', '')[:40]}")
+                    if app.get("android_found"):
+                        app_names.append(f"Android: {app.get('android_title', '')[:40]}")
+                    parts.append(f"  + App store: {', '.join(app_names)}")
+            else:
+                liveness_score = 0
+
+            # Combined assessment
+            avg_score = (site_score + liveness_score) / 2 if liveness_score > 0 else site_score
+            if avg_score >= 0.5:
+                finding["status"] = "confirmed"
+                finding["confidence"] = "high" if avg_score >= 0.7 else "medium"
+            elif avg_score >= 0.2:
+                finding["status"] = "inconclusive"
+                finding["confidence"] = "low"
+            else:
                 finding["status"] = "not_found"
+                finding["confidence"] = "medium"
+
+            finding["evidence"] = " | ".join(parts)
+
+            if not finding["key_detail"]:
+                finding["key_detail"] = f"Combined score: structure={site_score:.0%}, liveness={liveness_score:.0%}"
+
         except Exception as e:
             finding["evidence"] = f"URL verification failed: {str(e)[:100]}"
 
         return finding
 
     async def _verify_linkedin(self, client, fact: dict, linkedin_url: str, context: str) -> dict:
-        """Verify a LinkedIn profile against claimed employment history."""
+        """Verify a LinkedIn profile: deep analysis + cross-reference with claims."""
         finding = {
             "claim": fact.get("claim", ""),
             "type": "linkedin_profile",
@@ -1155,7 +1217,8 @@ Return JSON only:
             "confidence": "low",
             "evidence": "",
             "key_detail": "",
-            "urls": [linkedin_url]
+            "urls": [linkedin_url],
+            "linkedin_depth": {},
         }
 
         try:
@@ -1166,36 +1229,73 @@ Return JSON only:
                 else:
                     linkedin_url = f"https://{linkedin_url}"
 
-            analysis = await web_analysis.deep_analyze_linkedin(linkedin_url)
-            if analysis and not analysis.get("error"):
-                # Cross-reference with known context
-                li_data = json.dumps(analysis, ensure_ascii=False)[:2000]
+            # Extract person name and business from context for deep analysis
+            import re as _re
+            name_match = _re.search(r'"full_name":\s*"([^"]+)"', context)
+            biz_match = _re.search(r'"company_name":\s*"([^"]+)"', context)
+            person_name = name_match.group(1) if name_match else ""
+            business_name = biz_match.group(1) if biz_match else ""
 
-                assess_prompt = f"""You are a KYC fact-checker. Cross-reference this LinkedIn profile data with what the customer claimed in their interview.
+            # Run both old-style and new deep analysis in parallel
+            old_task = web_analysis.deep_analyze_linkedin(linkedin_url)
+            depth_task = web_analysis.analyze_linkedin_depth(
+                person_name or linkedin_url.split("/")[-1].replace("-", " "),
+                business_name
+            )
+            old_analysis, depth_analysis = await asyncio.gather(
+                old_task, depth_task, return_exceptions=True
+            )
+
+            # Merge results for the Haiku assessment
+            combined_data = {}
+            if isinstance(old_analysis, dict):
+                combined_data.update(old_analysis)
+            if isinstance(depth_analysis, dict):
+                finding["linkedin_depth"] = depth_analysis
+                combined_data["depth_analysis"] = {
+                    "connections": depth_analysis.get("connections"),
+                    "headline": depth_analysis.get("headline"),
+                    "current_role": depth_analysis.get("current_role"),
+                    "location": depth_analysis.get("location"),
+                    "activity_signals": depth_analysis.get("activity_signals", []),
+                    "profile_completeness": depth_analysis.get("profile_completeness"),
+                    "company_page": depth_analysis.get("company_page", {}),
+                    "signals": depth_analysis.get("signals", []),
+                    "red_flags": depth_analysis.get("red_flags", []),
+                    "reliability_score": depth_analysis.get("reliability_score", 0),
+                }
+
+            if combined_data:
+                li_data = json.dumps(combined_data, ensure_ascii=False)[:2500]
+
+                assess_prompt = f"""You are a KYC fact-checker. Cross-reference LinkedIn profile data with customer claims.
 
 KNOWN CUSTOMER CLAIMS (from interview):
 {context[:1500]}
 
-LINKEDIN PROFILE DATA:
+LINKEDIN PROFILE DATA (including deep analysis):
 {li_data}
 
 Check:
 1. Does the profile match the person's claimed name?
 2. Does it show the claimed employer and role?
 3. Is the timeline consistent?
-4. Any red flags (new profile, very few connections, mismatched info)?
+4. How many connections? (Under 50 = red flag for established professional)
+5. Is the profile active (posts, shares)?
+6. Does the company page exist and match?
+7. Any red flags (new profile, very few connections, mismatched info)?
 
 Return JSON only:
 {{
     "status": "confirmed|contradicted|inconclusive",
-    "evidence": "2-3 sentences summarizing what matches and what doesn't",
+    "evidence": "3-4 sentences. Include connection count, headline, activity level, company page status.",
     "confidence": "high|medium|low",
-    "key_detail": "The single most important finding"
+    "key_detail": "The single most important finding (e.g. '500+ connections, headline matches claimed role, company page has 200 followers')"
 }}"""
 
                 response = await client.messages.create(
                     model="claude-haiku-4-5-20251001",
-                    max_tokens=400,
+                    max_tokens=500,
                     messages=[{"role": "user", "content": assess_prompt}]
                 )
                 text = response.content[0].text.strip()
@@ -1208,7 +1308,7 @@ Return JSON only:
                     finding["confidence"] = parsed.get("confidence", "low")
                     finding["key_detail"] = parsed.get("key_detail", "")
             else:
-                finding["evidence"] = f"LinkedIn profile could not be accessed: {analysis.get('error', 'unknown')}"
+                finding["evidence"] = "LinkedIn profile could not be analyzed"
         except Exception as e:
             finding["evidence"] = f"LinkedIn verification failed: {str(e)[:100]}"
 

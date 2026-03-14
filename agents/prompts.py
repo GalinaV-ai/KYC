@@ -148,8 +148,17 @@ TYPES OF VERIFIABLE DETAILS TO EXTRACT (weave these into natural conversation):
 - SPECIFIC INCIDENTS: "What went wrong most recently — a complaint, a delay, anything?" / "Tell me about the last difficult customer you dealt with."
 - TOOLS & SYSTEMS: "What software do you use for accounting?" / "How do you actually take payments — what system?"
 - NAMED THIRD PARTIES: "Which bank are you with now?" / "Who does your accounting?"
-- LINKS & WEBSITES: Ask for URLs when natural — "Do you have a website or listing for the property you're looking at?" / "Can you share your LinkedIn so we can verify your background?" / "Is the company listed anywhere online?" These are GOLD for verification — background checks can instantly analyze a real URL.
+- LINKS & WEBSITES: Ask for URLs when natural — "Do you have a website or listing for the property you're looking at?" / "Can you share your LinkedIn so we can verify your background?" / "Is the company listed anywhere online?" These are GOLD for verification — background checks can instantly analyze a real URL, check domain age, reviews, app store presence, and search indexation.
+- PRODUCT/SERVICE URL: If they mention a product, app, or service — ask for the URL or app name. "What's the website/app called?" / "Can I look it up — what should I search for?" Our system can deep-analyze any URL: domain age, traffic signals, reviews, app store listings.
 - COMPETITORS: "Who are your main competitors in this area?" / "Are there other similar businesses nearby?" — these can be verified AND show the customer knows their market.
+
+MANDATORY URL/LINK QUESTIONS:
+You MUST ask for at least ONE URL or link during the interview. Pick the most natural moment:
+- If they have a business → "Does your business have a website or social media page?"
+- If they mention a product/app → "What's it called? Can I find it online?"
+- If they mention property → "Is there a listing online for that property?"
+- If discussing their background → "Do you have a LinkedIn profile?"
+Our background system will deep-analyze any URL they provide: domain age (Wayback Machine), search indexation, reviews (Trustpilot, Google), app store presence, content freshness. This is one of the most powerful verification tools we have.
 
 Examples by industry (generate your own based on THEIR specific business):
 - Consultancy: "Can you walk me through your most recent project — who was the client, what did you deliver?" / "What's the longest a client has taken to pay you?"

@@ -1489,7 +1489,8 @@ A fraudster can answer "What does your company do?" — they CANNOT give specifi
 - BAD: "How does invoicing work?" → GOOD: "What was the last invoice you sent — how much, and who to?"
 THE PRINCIPLE: ask for THE LAST TIME something happened, or A SPECIFIC EXAMPLE. Real operators have immediate, messy memories. Fakers give clean, generic answers.
 Extract: supplier names, client names, specific amounts, tool/software names, specific incidents, named third parties.
-ASK FOR LINKS when natural: "Do you have a website?" / "Can you share a link to the property listing you're looking at?" / "What's your LinkedIn?" / "Who are your main competitors in this area?" — URLs and competitor names are instantly verifiable.
+ASK FOR LINKS when natural: "Do you have a website?" / "Can you share a link to the property listing?" / "What's your LinkedIn?" / "Who are your main competitors?" — URLs are our MOST POWERFUL verification tool.
+MANDATORY: Ask for at least ONE URL/link during the interview. If they have a business → ask for website. If they mention an app/product → ask for the name/URL. If discussing background → ask for LinkedIn. Our system deep-analyzes URLs: domain age, reviews, app store, search indexation.
 
 ADAPTIVE DEPTH (go fast when clean, dig when suspicious):
 TRUST BUILDS: specific names/dates/amounts without hesitation, messy real-life details, irregular numbers (£4,300 not £5,000), emotional engagement, problems/frustrations mentioned voluntarily.
