@@ -7,6 +7,7 @@ Results are stored in investigation_log and fed back to the main orchestrator.
 """
 import asyncio
 import json
+import re
 import threading
 from datetime import datetime
 from typing import Optional
@@ -780,6 +781,12 @@ IMPORTANT: Only transliterate if you're confident. For names with clear etymolog
             pass
 
         if not facts:
+            facts = []
+
+        # Step 1b: Regex fallback — catch URLs/domains that Claude missed
+        facts = self._inject_urls_from_text(answer, facts)
+
+        if not facts:
             return result
 
         # Step 2: Search each fact in parallel — use targeted strategies
@@ -798,9 +805,22 @@ IMPORTANT: Only transliterate if you're confident. For names with clear etymolog
                     search_tasks.append(self._search_and_assess(
                         client, fact, ch_query, source_label="companies_house"
                     ))
-                # Targeted: address verification
+                # Targeted: address verification — use company/person name + location
                 elif fact_type == "address":
-                    addr_query = f'"{fact.get("claim", "")}" business OR office OR registered'
+                    entity = fact.get("entity_name", "").strip()
+                    location = fact.get("claim", "").strip()
+                    if entity:
+                        addr_query = f'"{entity}" {location} office OR registered address'
+                    else:
+                        # Try extracting company name from context
+                        ctx_company = ""
+                        cm = re.search(r'"company_name":\s*"([^"]+)"', context)
+                        if cm:
+                            ctx_company = cm.group(1)
+                        if ctx_company:
+                            addr_query = f'"{ctx_company}" {location} office OR registered'
+                        else:
+                            addr_query = f'{location} digital marketing agency office'
                     search_tasks.append(self._search_and_assess(
                         client, fact, addr_query, source_label="address_check"
                     ))
@@ -901,6 +921,99 @@ IMPORTANT: Only transliterate if you're confident. For names with clear etymolog
 
         return result
 
+    @staticmethod
+    def _inject_urls_from_text(text: str, facts: list) -> list:
+        """Regex fallback: detect URLs and domains in customer answers
+        that Claude's fact extraction might have missed.
+        Returns the facts list with any new URL/LinkedIn facts appended.
+        """
+        # Already-extracted URLs/domains
+        existing = set()
+        for f in facts:
+            if f.get("type") in ("url", "website", "linkedin_profile"):
+                existing.add(f.get("entity_name", "").lower().strip())
+
+        # Pattern 1: full URLs (http/https)
+        url_pattern = re.compile(
+            r'https?://[^\s,;)\]>"\']+', re.IGNORECASE
+        )
+        # Pattern 2: bare domains like "theleverage.net", "example.co.uk"
+        domain_pattern = re.compile(
+            r'\b([a-zA-Z0-9][-a-zA-Z0-9]*\.'
+            r'(?:com|net|org|co\.uk|io|dev|app|me|info|biz|uk|eu|de|fr|il|'
+            r'co|ai|tech|agency|digital|marketing|online|site|xyz|pro))\b',
+            re.IGNORECASE
+        )
+        # Pattern 3: LinkedIn mentions like "linkedin.com/in/..." or just "/in/username"
+        linkedin_pattern = re.compile(
+            r'(?:linkedin\.com/in/|linkedin\.com/company/)[\w-]+',
+            re.IGNORECASE
+        )
+
+        new_facts = []
+
+        # Extract full URLs
+        for match in url_pattern.finditer(text):
+            url = match.group(0).rstrip(".,;:)")
+            if url.lower() in existing:
+                continue
+            existing.add(url.lower())
+            # Also mark the bare domain as seen to prevent duplicates
+            try:
+                domain = url.split("/")[2].lower()
+                existing.add(domain)
+                existing.add(f"https://{domain}")
+            except IndexError:
+                pass
+            if "linkedin.com" in url.lower():
+                new_facts.append({
+                    "claim": f"Customer provided LinkedIn: {url}",
+                    "type": "linkedin_profile",
+                    "entity_name": url,
+                    "search_query": f"site:linkedin.com {url.split('/')[-1]}",
+                })
+            else:
+                new_facts.append({
+                    "claim": f"Customer provided URL: {url}",
+                    "type": "url",
+                    "entity_name": url,
+                    "search_query": f"site:{url.split('/')[2] if '/' in url else url}",
+                })
+
+        # Extract bare domains
+        for match in domain_pattern.finditer(text):
+            domain = match.group(1).lower()
+            if domain in existing or f"https://{domain}" in existing or f"http://{domain}" in existing:
+                continue
+            # Skip common false positives
+            if domain in ("e.g", "i.e", "etc.com"):
+                continue
+            existing.add(domain)
+            if "linkedin.com" in domain:
+                continue  # handled by linkedin_pattern
+            new_facts.append({
+                "claim": f"Customer mentioned website: {domain}",
+                "type": "url",
+                "entity_name": f"https://{domain}",
+                "search_query": f"site:{domain}",
+            })
+
+        # Extract LinkedIn paths
+        for match in linkedin_pattern.finditer(text):
+            li_path = match.group(0).lower()
+            full_url = f"https://{li_path}"
+            if full_url in existing or li_path in existing:
+                continue
+            existing.add(full_url)
+            new_facts.append({
+                "claim": f"Customer provided LinkedIn profile",
+                "type": "linkedin_profile",
+                "entity_name": full_url,
+                "search_query": f"site:linkedin.com {li_path.split('/')[-1]}",
+            })
+
+        return facts + new_facts
+
     async def _search_and_assess(self, client, fact: dict, query: str,
                                   source_label: str = "web") -> dict:
         """Search for a fact and assess whether results confirm or contradict it."""
@@ -953,12 +1066,20 @@ Analyze carefully:
 3. Does the evidence confirm, contradict, or is it unclear?
 4. How strong is the evidence? (high = direct official source, medium = credible indirect source, low = weak/unclear)
 
+CRITICAL STATUS RULES:
+- "confirmed": Search results contain DIRECT evidence supporting the claim (e.g. official records, news articles mentioning this specific entity/person/fact).
+- "contradicted": Search results contain DIRECT evidence that DISPROVES the claim (e.g. company records show a DIFFERENT founding date, a person is listed at a DIFFERENT company). The evidence must actively oppose the claim — not just fail to mention it.
+- "not_found": Search results do NOT contain information about this specific entity/claim. The entity may exist but isn't indexed, or the search returned unrelated results (e.g. searching "Baba Group" returns only "Alibaba Group" — that's not_found, NOT contradicted).
+- "inconclusive": Search results contain SOME tangentially related information, but not enough to confirm or contradict. Partial matches, indirect references, or plausible but unverified context.
+
+IMPORTANT: "not found in search results" is NOT the same as "contradicted". Many legitimate small businesses, niche companies, and individuals have minimal online presence. Only use "contradicted" when evidence ACTIVELY DISPROVES the claim.
+
 Return JSON only:
 {{
-    "status": "confirmed|contradicted|inconclusive",
-    "evidence": "2-3 sentence summary of what you found and WHY it confirms/contradicts/is inconclusive",
+    "status": "confirmed|contradicted|not_found|inconclusive",
+    "evidence": "2-3 sentence summary of what you found and WHY you chose this status",
     "confidence": "high|medium|low",
-    "key_detail": "The single most important fact found (e.g. 'Company incorporated 2019-03-15' or 'No record found for this company name')"
+    "key_detail": "The single most important fact found (e.g. 'Company incorporated 2019-03-15' or 'No results about this specific entity')"
 }}"""
 
         try:

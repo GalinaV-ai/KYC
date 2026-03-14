@@ -697,16 +697,29 @@ Greet them briefly and ask your first question. ONE question only. No value judg
         self.investigator.collect_results()
         self._store_investigation_findings()
 
-        # Budget enforcement: auto-complete if hard max exceeded
+        # Budget enforcement
         q_count = len(self.qa_log)
+        missing = self._get_missing_essentials()
+
+        # Hard stop — never go beyond absolute max
         if q_count >= self._q_hard_max + 2:
-            # Absolute hard stop — never go beyond this
             self.interview_complete = True
-            missing = self._get_missing_essentials()
             note = "Interview auto-completed (question budget exhausted)."
             if missing:
                 note += f" Missing: {', '.join(missing)}"
             self._add_reasoning({"note": note, "suspicion": "none"})
+            return "Thank you for your time. I have all the information I need to proceed with the assessment."
+
+        # Soft stop — closing phase for 3+ questions with all essentials covered
+        if (self._closing_entered_at is not None
+                and not missing
+                and q_count >= self._closing_entered_at + 3):
+            self.interview_complete = True
+            self._add_reasoning({
+                "note": f"Interview auto-completed: closing phase entered at Q{self._closing_entered_at}, "
+                        f"all essentials covered, {q_count} questions total.",
+                "suspicion": "none"
+            })
             return "Thank you for your time. I have all the information I need to proceed with the assessment."
 
         # Generate next question via fast Haiku call
@@ -736,17 +749,28 @@ Greet them briefly and ask your first question. ONE question only. No value judg
         return response
 
     def _store_investigation_findings(self):
-        """Store ALL investigation findings as case verifications for UI display."""
+        """Store ALL investigation findings as case verifications for UI display.
+        Uses a set of (timestamp, claim) tuples for O(1) dedup lookups.
+        """
+        # Build dedup index from existing verifications
+        existing_keys = set()
+        for v in self.case.verifications:
+            ts = v.get("timestamp", "")
+            claim = v.get("result", {}).get("claim", "") if isinstance(v.get("result"), dict) else ""
+            existing_keys.add((ts, claim))
+
         for inv in self.investigator.investigation_log:
-            # Use timestamp as dedup key
             ts = inv.get("timestamp", "")
-            if any(v.get("timestamp") == ts and v.get("source") == "background_investigation"
-                   for v in self.case.verifications):
-                continue
             for finding in inv.get("findings", []):
+                claim = finding.get("claim", "")
+                dedup_key = (ts, claim)
+                if dedup_key in existing_keys:
+                    continue
+                existing_keys.add(dedup_key)
+
                 source_type = finding.get("source", "background_investigation")
                 result_data = {
-                    "claim": finding.get("claim", ""),
+                    "claim": claim,
                     "status": finding.get("status", ""),
                     "evidence": finding.get("evidence", ""),
                     "confidence": finding.get("confidence", ""),
@@ -1394,16 +1418,18 @@ REMINDERS: ONE question per message. You know NOTHING except what the customer t
 
         if remaining <= 0:
             if missing:
-                lines.append(f"AT LIMIT. Still missing: {', '.join(missing)}. Cover these EFFICIENTLY in 1-2 grouped questions, then call complete_interview.")
+                lines.append(f"AT LIMIT. Still missing: {', '.join(missing)}. Cover these EFFICIENTLY in 1 grouped question, then call complete_interview IMMEDIATELY.")
             else:
-                lines.append("AT LIMIT. All essentials covered. Call complete_interview NOW.")
+                lines.append("AT LIMIT. All essentials covered. Call complete_interview NOW. Do NOT ask another question.")
         elif remaining <= 3:
             if missing:
-                lines.append(f"ALMOST DONE. Still need: {', '.join(missing)}. Group remaining topics — ask compound questions.")
+                lines.append(f"ALMOST DONE. Still need: {', '.join(missing)}. Group remaining topics into ONE compound question, then call complete_interview.")
             else:
-                lines.append("All essentials covered. Call complete_interview when ready.")
+                lines.append("All essentials covered. Call complete_interview NOW — there is no reason to continue.")
+        elif q_count >= 12 and not missing:
+            lines.append("ENOUGH INFORMATION GATHERED. You have all essentials. Call complete_interview NOW. Do not ask more questions just to fill time.")
         elif q_count >= 10 and not missing:
-            lines.append("All essentials covered. Consider calling complete_interview — don't keep asking if you have what you need.")
+            lines.append("All essentials covered. Call complete_interview — do not keep asking if you already have what you need.")
         elif missing:
             lines.append(f"Still need to cover: {', '.join(missing)}. Be efficient — group related topics into single questions.")
 
@@ -1483,6 +1509,16 @@ REMINDERS: ONE question per message. You know NOTHING except what the customer t
             lines.append(f"NEEDS FOLLOW-UP: {'; '.join(probe_labels)}")
         if remaining and s["phase"] != "closing":
             lines.append(f"STILL TO COVER: {', '.join(remaining[:4])}")
+
+        # URL/LinkedIn tracking — remind if not asked yet
+        has_url = bool(self.case.business.website)
+        has_linkedin = any("linkedin" in str(v.get("query", "")).lower()
+                           for v in self.case.verifications)
+        q_count = len(self.qa_log)
+        if not has_url and not has_linkedin and q_count >= 3:
+            lines.append("⚠ MANDATORY: You have NOT yet asked for a website or LinkedIn. Ask NOW — 'Do you have a website?' or 'What's your LinkedIn?'. URLs are our strongest verification tool.")
+        elif has_url and not has_linkedin and q_count >= 6:
+            lines.append("💡 Consider asking for their LinkedIn profile for additional verification.")
 
         # In closing, show what's still missing
         if s["phase"] == "closing":
