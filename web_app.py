@@ -714,6 +714,19 @@ def render_chat(case):
         st.rerun()
         return
 
+    # "Stop & assess" button
+    if not st.session_state.interview_complete:
+        if st.button("⏹ Stop interview & see result", type="secondary",
+                      use_container_width=True):
+            orch = st.session_state.orchestrator
+            orch.interview_complete = True
+            orch._add_reasoning({
+                "note": "Interview stopped manually by the operator.",
+                "suspicion": "none",
+            })
+            st.session_state.interview_complete = True
+            st.rerun()
+
     # Chat input with paste detection (timing heuristic)
     if not st.session_state.interview_complete:
         user_input = st.chat_input("Type your response...")
