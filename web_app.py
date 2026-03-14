@@ -19,7 +19,8 @@ import streamlit as st
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from models import KYCCase, PersonInfo, BusinessInfo, BusinessActivity
-from agents.orchestrator import KYCOrchestrator, run_risk_assessment
+from agents.orchestrator import KYCOrchestrator
+from agents.risk_analyst import run_risk_assessment
 import anthropic
 
 # ─── Page config ───
@@ -186,9 +187,6 @@ async def send_message(user_input: str, pasted: bool = False, keystroke_ratio: f
     response = await orch.process_customer_input(user_input, pasted=pasted, keystroke_ratio=keystroke_ratio)
     if orch.interview_complete:
         st.session_state.interview_complete = True
-    if orch.pending_document_request:
-        st.session_state.pending_doc_request = orch.pending_document_request
-        orch.pending_document_request = None
     st.session_state.messages.append({"role": "assistant", "content": response})
     case.add_conversation_entry("agent", response)
     _sync_reasoning()
@@ -210,19 +208,9 @@ async def process_document(file_path: str, doc_type: str):
 async def run_assessment():
     case = st.session_state.case
     orch = st.session_state.orchestrator
-    client = anthropic.AsyncAnthropic()
 
-    # Collect all investigation data for thorough risk assessment
-    reasoning_log = orch.get_reasoning_log()
-    verification_findings = orch.investigator.get_detailed_findings()
-    sanctions_results = orch.investigator.sanctions_results
-
-    assessment = await run_risk_assessment(
-        case, client,
-        reasoning_log=reasoning_log,
-        verification_findings=verification_findings,
-        sanctions_results=sanctions_results,
-    )
+    # Use the new orchestrator's run_assessment which delegates to Risk Analyst
+    assessment = await orch.run_assessment()
     case.risk_assessment = assessment
     case.current_phase = "completed"
     case.save(os.path.join(CASES_DIR, f"{st.session_state.case_id}.json"))
@@ -240,12 +228,16 @@ def _sync_reasoning():
 
 def _get_confidence_pct() -> int:
     orch = st.session_state.orchestrator
-    if not orch or not hasattr(orch, 'strategy'):
+    if not orch or not orch.qa_log:
         return 0
-    conf = orch.strategy.get("confidence", {})
-    if not conf:
-        return 0
-    return int(sum(conf.values()) / len(conf) * 100)
+    # Estimate confidence from assessor summary
+    summary = orch.assessor.get_assessment_summary()
+    total = summary.get("total", 0)
+    if total == 0:
+        # Fallback: estimate from question count
+        return min(100, len(orch.qa_log) * 8)
+    confirmed = summary.get("confirmed", 0)
+    return min(100, int(confirmed / total * 100) if total else 0)
 
 
 def _get_live_summary() -> str:
@@ -254,33 +246,31 @@ def _get_live_summary() -> str:
         return ""
 
     case = st.session_state.case
-    conf = orch.strategy.get("confidence", {})
-    tone = orch.strategy.get("tone", "")
     biz_name = case.business.company_name or "the business"
 
     parts = []
-    avg = sum(conf.values()) / len(conf) if conf else 0
-    if avg >= 0.7:
-        parts.append(f"Good understanding of {biz_name}")
-    elif avg >= 0.4:
-        parts.append(f"Partial picture of {biz_name}")
-    else:
-        parts.append(f"Still learning about {biz_name}")
+    q_count = len(orch.qa_log)
+    parts = [f"{q_count} question{'s' if q_count != 1 else ''} asked"]
 
-    weak = [k for k, v in conf.items() if v < 0.3]
-    if weak:
-        labels = {"person": "person", "business_existence": "business existence",
-                  "operations": "operations", "financials": "financials",
-                  "consistency": "consistency"}
-        parts.append(f"Need more on: {', '.join(labels.get(w, w) for w in weak)}")
+    # Assessment status from assessor
+    a_summary = orch.assessor.get_assessment_summary()
+    total_assessed = a_summary.get("total", 0)
+    if total_assessed > 0:
+        confirmed = a_summary.get("confirmed", 0)
+        contradicted = a_summary.get("contradicted", 0)
+        parts.append(f"{total_assessed} facts checked ({confirmed} confirmed)")
+        if contradicted > 0:
+            parts.append(f"{contradicted} contradiction{'s' if contradicted > 1 else ''}")
+
+    # Verification engine status
+    ve_summary = orch.verification_engine.get_summary()
+    checks_run = ve_summary.get("total_checks_run", 0)
+    if checks_run > 0:
+        parts.append(f"{checks_run} verification checks run")
 
     red_flags = len(case.red_flags)
     if red_flags > 0:
         parts.append(f"{red_flags} red flag{'s' if red_flags > 1 else ''}")
-    if tone == "challenging":
-        parts.append("Contradictions detected")
-    elif tone == "probing":
-        parts.append("Some answers need follow-up")
 
     return ". ".join(parts) + "."
 
