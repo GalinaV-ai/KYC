@@ -790,8 +790,14 @@ IMPORTANT: Only transliterate if you're confident. For names with clear etymolog
             return result
 
         # Step 2: Search each fact in parallel — use targeted strategies
+        # Prioritize URL/LinkedIn facts (most valuable for verification)
+        priority_types = {"url", "website", "linkedin_profile"}
+        priority_facts = [f for f in facts if f.get("type") in priority_types]
+        other_facts = [f for f in facts if f.get("type") not in priority_types]
+        facts_ordered = priority_facts + other_facts
+
         search_tasks = []
-        for fact in facts[:5]:  # All extracted facts
+        for fact in facts_ordered[:7]:  # Up to 7 facts (URLs always included)
             query = fact.get("search_query", "")
             fact_type = fact.get("type", "other")
             if query:
@@ -1062,17 +1068,21 @@ SEARCH RESULTS:
 
 Analyze carefully:
 1. Do the search results contain direct evidence about THIS specific claim?
-2. Is the evidence about the SAME entity (not a different person/company with similar name)?
+2. CRITICAL — SAME ENTITY CHECK: Is the evidence about the EXACT SAME entity? Common names like "Leverage", "Summit", "Apex", "Global" etc. have MANY different companies. If the search finds "Leverage founded in 2024 by Corey" but our customer is "Elad" — that's a DIFFERENT company named Leverage. That's "not_found", NOT "contradicted".
 3. Does the evidence confirm, contradict, or is it unclear?
 4. How strong is the evidence? (high = direct official source, medium = credible indirect source, low = weak/unclear)
 
 CRITICAL STATUS RULES:
-- "confirmed": Search results contain DIRECT evidence supporting the claim (e.g. official records, news articles mentioning this specific entity/person/fact).
-- "contradicted": Search results contain DIRECT evidence that DISPROVES the claim (e.g. company records show a DIFFERENT founding date, a person is listed at a DIFFERENT company). The evidence must actively oppose the claim — not just fail to mention it.
-- "not_found": Search results do NOT contain information about this specific entity/claim. The entity may exist but isn't indexed, or the search returned unrelated results (e.g. searching "Baba Group" returns only "Alibaba Group" — that's not_found, NOT contradicted).
+- "confirmed": Search results contain DIRECT evidence supporting the claim about THIS SPECIFIC entity/person. The entity must match (same name, same industry, same location, same founder).
+- "contradicted": Search results contain DIRECT evidence that DISPROVES the claim about THIS SPECIFIC entity. You must be CERTAIN it's the same entity. If it could be a different company/person with the same name — use "not_found" or "inconclusive" instead.
+- "not_found": Search results do NOT contain information about this specific entity/claim. This includes: entity not indexed, search returned only unrelated results, or results about DIFFERENT entities with the same name.
 - "inconclusive": Search results contain SOME tangentially related information, but not enough to confirm or contradict. Partial matches, indirect references, or plausible but unverified context.
 
-IMPORTANT: "not found in search results" is NOT the same as "contradicted". Many legitimate small businesses, niche companies, and individuals have minimal online presence. Only use "contradicted" when evidence ACTIVELY DISPROVES the claim.
+SAME-NAME TRAP (VERY COMMON — be careful):
+- "Leverage founded in 2024 by Corey" when our customer is Elad → DIFFERENT company → not_found
+- "Kadabra IT services" when our customer's Kadabra is a betting company → DIFFERENT company → not_found
+- "John Smith at Deloitte" when our John Smith works at a small agency → DIFFERENT person → not_found
+Only mark "contradicted" when you are SURE the evidence is about the SAME specific entity.
 
 Return JSON only:
 {{

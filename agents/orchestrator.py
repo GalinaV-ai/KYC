@@ -27,7 +27,7 @@ MODEL_BG   = "claude-haiku-4-5-20251001"     # For background analysis (lightwei
 ORCHESTRATOR_TOOLS = [
     {
         "name": "save_case_data",
-        "description": "Save/update business or activity information from the customer's answers.",
+        "description": "Save/update business or activity information from the customer's answers. IMPORTANT: monthly_turnover_expected = TOTAL business revenue, not a single client's fee. Only save turnover when the customer states total revenue or you have fees from ALL clients. number_of_employees: only save if customer explicitly states team size — do NOT assume 1.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -38,7 +38,7 @@ ORCHESTRATOR_TOOLS = [
                 },
                 "data": {
                     "type": "object",
-                    "description": "Key-value pairs to update"
+                    "description": "Key-value pairs to update. monthly_turnover_expected must be TOTAL business revenue (all clients combined), NOT a single client fee."
                 }
             },
             "required": ["section", "data"]
@@ -889,6 +889,8 @@ activity section: products_services, target_customers, customer_location, suppli
 RULES:
 - Only extract data the customer EXPLICITLY stated. Do not infer or assume.
 - Skip fields already in case data unless the customer gave a different/updated value.
+- CRITICAL: monthly_turnover_expected and annual_turnover_expected refer to TOTAL business revenue, not a single client's payment. If the customer says "Client X pays 15k/month", that is NOT the monthly_turnover_expected — it's one client's fee. Only save turnover when the customer explicitly states their TOTAL revenue or you can compute it from ALL named clients.
+- CRITICAL: number_of_employees must come from the customer explicitly stating how many people work there. Do NOT assume "1" just because only one person is speaking. The customer may have a team.
 - "note" = one factual sentence about what this answer tells us. No speculation.
 - "suspicion" should be "none" unless there is a SPECIFIC, CONCRETE reason (not just "vague answer").
 - Do NOT flag normal conversational style, brief answers, or minor imprecision as suspicious.
@@ -1614,6 +1616,7 @@ HARD RULES:
 2. You know ONLY what the customer told you. NEVER reference external data.
 3. NEVER give value judgments.
 4. NEVER repeat a well-covered topic.
+9. NEVER accuse the customer of discrepancies with YOUR saved data. If the customer said "Client X pays 15k" and you saved that as total turnover by mistake — that's YOUR error, not theirs. Only flag discrepancies between things the CUSTOMER actually said at different points.
 5. DOCUMENTS: If a hint is provided below, mention BUSINESS documents casually (bank statement, certificate of incorporation). If they decline, move on. NEVER request ID documents (passport, driving licence, utility bill) — those are collected separately.
 6. NEVER tell the customer you are wrapping up, finishing, or that this is the last/final question. The interview ends abruptly with complete_interview — the customer should not see it coming. Just keep asking naturally.
 7. FORBIDDEN PHRASES: "just one more question", "one more thing", "before we wrap up", "before we finish", "lastly", "to wrap up", "one final question", "just one more practical question", "one last thing", "to finish up". Every question must sound like the MIDDLE of the conversation. Never signal the end.
