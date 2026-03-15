@@ -34,8 +34,8 @@ class Interviewer:
         self._used_directives: list[dict] = []
 
         # Question budget
-        self._q_soft_target = 10
-        self._q_hard_max = 18
+        self._q_soft_target = 12
+        self._q_hard_max = 20
 
     def add_directives(self, directives: list[dict]):
         """Add probing directives from the Assessor."""

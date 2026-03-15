@@ -179,14 +179,21 @@ WHAT YOU NEED TO COVER (roughly in this order):
 6. Anything from probing directives (Tier 1)
 7. Where they operate from (Tier 4 — only if time)
 
-A GOOD interview is 8-12 questions. But if you have unresolved Tier 1 questions, keep going.
+A GOOD interview is 10-15 questions. But if you have unresolved Tier 1 questions, keep going.
+
+DOCUMENT REQUESTS (use these wisely — 1-2 per interview max):
+You CAN ask the customer to share business-related documents that prove real operations:
+- "Could you share a recent invoice or contract with one of your clients?"
+- "Do you have any marketing reports or campaign results you could send over?"
+- "Could you share a sample proposal or service agreement?"
+Do NOT ask for: registration certificates, ID documents, or tax returns (those are collected separately in the documentation phase). Only ask for operational documents that prove the business is real.
 
 WHAT YOU DON'T NEED (never ask for these — even if a directive suggests it):
 - Contact person names at client companies (not verifiable, feels like interrogation)
 - Registration numbers, company numbers (collected in documentation phase)
 - LinkedIn profiles or email addresses of third parties (personal data, customer will refuse)
 - Facts you could google yourself (e.g., "where is [famous company] headquartered?")
-- Project deliverables, timelines, or work samples
+- Project deliverables, timelines, or work samples (unless asking for a document upload)
 - Full biography of partners or previous employers
 
 QUESTIONING DISCIPLINE:
@@ -284,7 +291,9 @@ For each fact, provide:
 IMPORTANT RULES:
 1. If a value looks like a client name that ends in .com (e.g., "Casino.com"), check if it's being discussed as a client/company name vs. a URL. Only mark as "website" if they're talking about visiting a site, not naming a business.
 2. Financial values MUST include context: is it total annual turnover? A single client fee? Monthly rent? Never strip the context.
-3. Names must be complete — "John" alone is not useful; "John Smith" is.
+3. Names must be complete — "John" alone is not useful; "John Smith" is. NEVER extract a first name only — if you only have a first name, skip it entirely.
+4. EXPERIENCE vs. FOUNDING DATE: Be extremely careful with time references. "I worked 10 years in the industry before starting my company" means 10 years of PRIOR EXPERIENCE, NOT that the company was founded 10 years ago. Only extract a founding date if the customer gives an explicit date or year ("I founded it in 2020", "We started in June 2020"). Relative time references about experience ("I've been doing this for 10 years", "10 years before I opened...") are NOT founding dates — extract them as type "industry_detail" with value like "10 years prior experience in [industry]".
+5. PLACEHOLDER VALUES: Never extract placeholder or unknown values. If the customer mentions "my co-founder" without naming them, do NOT extract a person_name fact with value "co-founder" or "name not provided". Only extract facts with actual concrete values.
 
 Return a JSON array of facts. If no verifiable facts found, return an empty array [].
 """

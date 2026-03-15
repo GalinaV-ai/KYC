@@ -511,6 +511,12 @@ RULES:
    - No point checking github for a restaurant
    - No point checking land_registry without a specific address
 
+6. CRITICAL — DO NOT run these useless checks:
+   - NEVER search for a FIRST NAME ONLY (e.g., "Elad" without surname). Always use full names.
+   - NEVER search for "Company A Company B relationship" or "Company A Company B digital marketing" — business partnerships are rarely published online. These searches return noise.
+   - NEVER use placeholder values like "name not provided", "co-founder", "unknown" as search parameters.
+   - If you only have a first name, SKIP the person check entirely until the full name is available.
+
 Return a JSON array of check objects. Each object must have:
 - "check_id": the check name from the registry
 - "params": dict of parameters to pass
@@ -582,6 +588,116 @@ class VerificationEngine:
             print(f"[VerificationEngine] Dedup: skipped {skipped} duplicate checks")
         return deduped
 
+    # ── Patterns that indicate a useless search parameter ──
+    _PLACEHOLDER_PATTERNS = [
+        r"not provided", r"not specified", r"not given", r"unknown",
+        r"name not", r"co-founder$", r"partner$", r"employee$",
+    ]
+
+    def _is_first_name_only(self, name: str) -> bool:
+        """Check if a value is just a first name (single word, no surname)."""
+        parts = name.strip().split()
+        return len(parts) == 1 and len(name.strip()) < 20
+
+    def _is_placeholder(self, value: str) -> bool:
+        """Check if a value is a placeholder like 'name not provided'."""
+        import re
+        lower = value.strip().lower()
+        for pattern in self._PLACEHOLDER_PATTERNS:
+            if re.search(pattern, lower):
+                return True
+        # Parenthesised descriptions like "Co-founder (name not provided)"
+        if "(" in lower and ")" in lower:
+            return True
+        return False
+
+    def _is_partnership_search(self, params: dict) -> bool:
+        """Check if a web_search query is searching for two companies working together."""
+        import re
+        query = params.get("query", params.get("search_term", "")).lower()
+        # Pattern: "Company A Company B [relationship verb]"
+        relationship_words = [
+            "partnership", "relationship", "work together", "working together",
+            "collaboration", "client", "digital marketing",
+        ]
+        # If query contains relationship words AND looks like two entity names
+        if any(word in query for word in relationship_words):
+            # Count capitalised words (rough proxy for entity names)
+            caps = re.findall(r'[A-Z][a-z]+', params.get("query", params.get("search_term", "")))
+            if len(caps) >= 2:
+                return True
+        return False
+
+    def _sanitize_facts(self, facts: list[dict]) -> list[dict]:
+        """Remove facts with useless values before routing."""
+        clean = []
+        for fact in facts:
+            value = fact.get("value", "").strip()
+            fact_type = fact.get("type", "")
+
+            # Skip empty
+            if not value:
+                continue
+
+            # Skip first-name-only person facts
+            if fact_type in ("person_name", "partner", "counterparty") and self._is_first_name_only(value):
+                print(f"[VerificationEngine] Sanitize: skipped first-name-only fact '{value}'")
+                continue
+
+            # Skip placeholder values
+            if self._is_placeholder(value):
+                print(f"[VerificationEngine] Sanitize: skipped placeholder fact '{value}'")
+                continue
+
+            clean.append(fact)
+
+        return clean
+
+    # Checks that operate on person names (first-name-only filter applies)
+    _PERSON_CHECKS = {
+        "person_search", "disqualified_directors", "insolvency_register",
+        "director_history", "network_analysis",
+    }
+
+    def _validate_planned_checks(self, planned: list[dict]) -> list[dict]:
+        """Filter out checks with useless parameters after routing."""
+        valid = []
+        for check in planned:
+            params = check.get("params", {})
+            check_id = check.get("check_id", "")
+            skip = False
+
+            # Person-related checks: require full name (at least 2 words)
+            person_params = ["person_name", "name"]
+            is_person_check = check_id in self._PERSON_CHECKS
+            for p in person_params:
+                if p in params:
+                    name_val = params[p]
+                    if self._is_placeholder(name_val):
+                        print(f"[VerificationEngine] Validate: skipped {check_id} — placeholder '{name_val}'")
+                        skip = True
+                        break
+                    # First-name-only filter only for person-specific checks
+                    if is_person_check and self._is_first_name_only(name_val):
+                        print(f"[VerificationEngine] Validate: skipped {check_id} — first-name-only '{name_val}'")
+                        skip = True
+                        break
+
+            if skip:
+                continue
+
+            # Web searches: skip "Company A + Company B relationship" queries
+            if check_id == "web_search" and self._is_partnership_search(params):
+                print(f"[VerificationEngine] Validate: skipped partnership search '{params}'")
+                continue
+
+            valid.append(check)
+
+        skipped = len(planned) - len(valid)
+        if skipped:
+            print(f"[VerificationEngine] Validate: filtered {skipped} low-quality checks")
+        return valid
+
     async def plan_checks(
         self,
         facts: list[dict],
@@ -591,6 +707,9 @@ class VerificationEngine:
         Use Claude to decide which checks to run for a set of facts.
         Returns a list of planned checks with priorities.
         """
+        # Pre-filter facts with useless values
+        facts = self._sanitize_facts(facts)
+
         # Build check list description
         check_list = ""
         for check_id, info in VERIFICATION_REGISTRY.items():
@@ -630,11 +749,14 @@ class VerificationEngine:
                     text = text[4:]
             planned = json.loads(text)
             if isinstance(planned, list):
-                return self._dedup_planned(planned)
+                deduped = self._dedup_planned(planned)
+                return self._validate_planned_checks(deduped)
         except Exception as e:
             print(f"[VerificationEngine] Routing error: {e}")
             # Fallback to rule-based routing
-            return self._rule_based_routing(facts, business_context)
+            return self._validate_planned_checks(
+                self._rule_based_routing(facts, business_context)
+            )
 
         return []
 
@@ -669,8 +791,8 @@ class VerificationEngine:
                 })
                 completed_keys.add(key)  # Prevent intra-batch duplicates
 
-        # ── Mandatory checks ──
-        if person_name:
+        # ── Mandatory checks (only with full names, not first-name-only) ──
+        if person_name and not self._is_first_name_only(person_name):
             add("adverse_media", {"name": person_name, "company_name": company_name},
                 "critical", "Mandatory adverse media screening for person")
             add("disqualified_directors", {"person_name": person_name},
