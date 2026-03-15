@@ -208,7 +208,7 @@ WHAT YOU NEED TO COVER (roughly in this order):
 6. Anything from probing directives (Tier 1)
 7. Where they operate from (Tier 4 — only if time)
 
-A GOOD interview is 10-15 questions. But if you have unresolved Tier 1 questions, keep going.
+A GOOD interview is 12-18 questions. But if you have unresolved Tier 1 questions, keep going.
 
 DOCUMENT REQUESTS (use these wisely — 1-2 per interview max):
 You CAN ask the customer to share business-related documents that prove real operations:
