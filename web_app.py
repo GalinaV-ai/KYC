@@ -21,7 +21,26 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from models import KYCCase, PersonInfo, BusinessInfo, BusinessActivity
 from agents.orchestrator import KYCOrchestrator
 from agents.risk_analyst import run_risk_assessment
+import subprocess
 import anthropic
+
+
+def _get_version() -> str:
+    """Get version string from git (short hash + date)."""
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%h (%ad)", "--date=short"],
+            capture_output=True, text=True, cwd=root, timeout=3,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
+APP_VERSION = _get_version()
 
 # ─── Page config ───
 st.set_page_config(
@@ -750,6 +769,7 @@ def _render_company_search(result: dict):
 def render_sidebar():
     with st.sidebar:
         st.markdown("### 🏦 KYC Agent")
+        st.caption(f"v {APP_VERSION}")
 
         with st.expander("New Interview", expanded=st.session_state.case is None):
             with st.form("new_interview_form"):
