@@ -261,6 +261,9 @@ class Interviewer:
         """Build the system message with current interview context."""
         parts = [INTERVIEWER_PROMPT]
 
+        # Inject current date so the agent can reason about timelines
+        parts.append(f"\n\nTODAY'S DATE: {datetime.now().strftime('%d %B %Y')}")
+
         q_count = len(self.qa_log)
         budget = self._q_soft_target
 
