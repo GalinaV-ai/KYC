@@ -167,6 +167,14 @@ class Interviewer:
         # Check if interview should complete
         data_to_save = self._extract_data_to_save(text)
 
+        # Detect if the interviewer chose to wrap up (no question in response)
+        if not self.interview_complete and self._is_closing_message(message):
+            self.interview_complete = True
+            self._add_reasoning({
+                "note": f"Interview auto-completed: interviewer sent closing message (no further questions).",
+                "suspicion": "none"
+            })
+
         self.messages.append({"role": "assistant", "content": text})
         self._last_question = message
         return message, reasoning, data_to_save
@@ -374,6 +382,31 @@ class Interviewer:
             return
         first = self.messages[0]
         self.messages = [first] + self.messages[-(keep_last):]
+
+    @staticmethod
+    def _is_closing_message(message: str) -> bool:
+        """Detect if the interviewer's message is a farewell/closing (no question asked)."""
+        # If the message contains a question mark, the interviewer is still asking
+        if "?" in message:
+            return False
+
+        # Check for closing phrases
+        lower = message.lower()
+        closing_phrases = [
+            "thank you for your time",
+            "thanks for your time",
+            "that gives me a good understanding",
+            "i have all the information",
+            "we have what we need",
+            "we'll be in touch",
+            "we will be in touch",
+            "next steps",
+            "proceed with the assessment",
+            "proceed with your application",
+            "that's everything i need",
+            "that covers everything",
+        ]
+        return any(phrase in lower for phrase in closing_phrases)
 
     @staticmethod
     def _strip_wrapping_phrases(text: str) -> str:
