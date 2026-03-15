@@ -77,6 +77,16 @@ Return a JSON array of facts."""
                 "facts": facts,
             })
 
+            # Handle corrections — mark old facts as superseded
+            for f in facts:
+                corrects = f.get("corrects", "")
+                if corrects:
+                    corrects_lower = corrects.strip().lower()
+                    for old_fact in self.all_facts:
+                        if old_fact.get("value", "").strip().lower() == corrects_lower:
+                            old_fact["superseded"] = True
+                            old_fact["superseded_by"] = f.get("value", "")
+
             self.all_facts.extend(facts)
             return facts
 

@@ -179,19 +179,48 @@ class Interviewer:
             "suspicion": "none"
         })
 
+    # Directives matching these patterns are filtered out before reaching the LLM
+    _BAD_DIRECTIVE_PATTERNS = [
+        "contact person", "contact name", "who is your contact",
+        "registration number", "company number", "companies house number",
+        "linkedin profile", "linkedin url",
+        "email address", "email of",
+        "pull up your website", "verify your website", "open your website",
+        "where is .* headquartered", "where is .* based",  # googleable
+    ]
+
+    def _is_bad_directive(self, directive: dict) -> bool:
+        """Check if a directive asks for something we shouldn't ask the customer."""
+        import re
+        text = directive.get("directive", "").lower()
+        desired = directive.get("desired_answer_type", "")
+
+        for pattern in self._BAD_DIRECTIVE_PATTERNS:
+            if re.search(pattern, text):
+                return True
+
+        return False
+
     def _get_active_directives(self) -> list[dict]:
         """Get ONE directive to include in the next turn.
 
         Only one directive per turn to prevent multi-question overload.
         Priority: critical > high > medium > low.
+        Filters out bad directives (contact names, registration numbers, etc.).
         """
-        if not self._pending_directives:
-            return []
+        while self._pending_directives:
+            candidate = self._pending_directives.pop(0)
+            if self._is_bad_directive(candidate):
+                self._used_directives.append(candidate)  # Mark as used so it's not re-added
+                self._add_reasoning({
+                    "note": f"Skipped bad directive: '{candidate.get('directive', '')[:60]}' (asks for googleable/inappropriate data)",
+                    "suspicion": "none"
+                })
+                continue
+            self._used_directives.append(candidate)
+            return [candidate]
 
-        # Take the highest-priority directive (list is already sorted)
-        chosen = self._pending_directives.pop(0)
-        self._used_directives.append(chosen)
-        return [chosen]
+        return []
 
     @staticmethod
     def _customer_wants_to_stop(answer: str) -> bool:
@@ -226,6 +255,16 @@ class Interviewer:
 
         q_count = len(self.qa_log)
         budget = self._q_soft_target
+
+        # Add topics already covered to prevent re-asking
+        if self.qa_log:
+            topics = []
+            for qa in self.qa_log:
+                q = qa.get("q", "")[:80]
+                a = qa.get("a", "")[:40]
+                topics.append(f"Q: {q} → A: {a}")
+            parts.append(f"\n\nTOPICS ALREADY COVERED (do NOT re-ask any of these):")
+            parts.append("\n".join(topics))
 
         # Count pending high-priority directives
         pending_high = sum(1 for d in self._pending_directives if d.get("urgency") in ("critical", "high"))

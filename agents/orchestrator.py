@@ -223,6 +223,12 @@ class KYCOrchestrator:
         if not facts:
             return
 
+        # Filter out superseded facts (customer corrections)
+        facts = [f for f in facts if not f.get("superseded")]
+
+        if not facts:
+            return
+
         # Step 2: Plan and run verification checks
         business_context = self.fact_extractor.get_business_context()
         # Add case data to context

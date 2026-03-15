@@ -65,7 +65,14 @@ class Assessor:
                 a["timestamp"] = datetime.now().isoformat()
                 self.assessments.append(a)
 
-            for d in result.get("directives", []):
+            # Cap directives at 3 per round — quality over quantity
+            directives = result.get("directives", [])
+            urgency_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+            directives.sort(key=lambda x: urgency_order.get(x.get("urgency", "low"), 3))
+            directives = directives[:3]
+            result["directives"] = directives
+
+            for d in directives:
                 d["timestamp"] = datetime.now().isoformat()
                 self.directives.append(d)
 
