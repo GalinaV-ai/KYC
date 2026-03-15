@@ -117,14 +117,15 @@ VERIFICATION_REGISTRY = {
         "required_params": ["person_name"],
         "cost": "free",
     },
-    "london_gazette": {
-        "function": "check_london_gazette",
-        "category": "government",
-        "description": "Search London Gazette for insolvency/winding-up notices",
-        "relevant_for": ["any_company", "any_person"],
-        "required_params": ["name"],
-        "cost": "free",
-    },
+    # london_gazette: DISABLED — too many false positives on common company names
+    # "london_gazette": {
+    #     "function": "check_london_gazette",
+    #     "category": "government",
+    #     "description": "Search London Gazette for insolvency/winding-up notices",
+    #     "relevant_for": ["any_company", "any_person"],
+    #     "required_params": ["name"],
+    #     "cost": "free",
+    # },
     "insolvency_register": {
         "function": "check_insolvency_register",
         "category": "government",
@@ -477,7 +478,6 @@ You have access to {total_checks} verification methods. For each fact, select th
 RULES:
 1. ALWAYS run these checks regardless of context:
    - adverse_media (for person AND company name)
-   - london_gazette (for company name)
    - disqualified_directors (for person name)
    - ico_register (for company name)
    - social_media (for company name)
@@ -805,8 +805,7 @@ class VerificationEngine:
         if company_name:
             add("adverse_media", {"name": company_name},
                 "critical", "Mandatory adverse media screening for company")
-            add("london_gazette", {"name": company_name},
-                "critical", "Check for insolvency/winding-up notices")
+            # london_gazette disabled — false positives on common names
             add("ico_register", {"organisation_name": company_name},
                 "medium", "Check ICO data protection registration")
             add("social_media", {"business_name": company_name, "person_name": person_name},
@@ -1000,7 +999,7 @@ class VerificationEngine:
             "ico_register": lambda p: check_ico_register(p.get("organisation_name", "")),
             "charity_commission": lambda p: check_charity_commission(p.get("name", ""), p.get("charity_number", "")),
             "disqualified_directors": lambda p: check_disqualified_directors(p.get("person_name", "")),
-            "london_gazette": lambda p: check_london_gazette(p.get("name", ""), p.get("is_company", True)),
+            # "london_gazette": disabled — false positives on common company names
             "insolvency_register": lambda p: check_insolvency_register(p.get("person_name", "")),
             "food_hygiene": lambda p: check_food_hygiene_rating(p.get("business_name", ""), p.get("location", "")),
             "cqc_register": lambda p: check_cqc_register(p.get("provider_name", "")),

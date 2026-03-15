@@ -243,6 +243,53 @@ Produce your assessments and probing directives as JSON."""
             "suspicious_claims": [{"claim": a.get("claim"), "reasoning": a.get("reasoning")} for a in suspicious],
         }
 
+    def get_information_gaps(self) -> list[dict]:
+        """Identify information gaps that the customer could help close.
+
+        Returns actionable gaps — things the customer can provide (documents,
+        clarifications), NOT things that require third-party contacts.
+        """
+        gaps = []
+
+        summary = self.get_assessment_summary()
+
+        # Contradictions that haven't been resolved
+        for item in summary.get("contradicted_claims", []):
+            claim = item.get("claim", "")
+            reasoning = item.get("reasoning", "")
+            gaps.append({
+                "type": "contradiction",
+                "description": f"Contradiction: {claim}",
+                "detail": reasoning,
+                "urgency": "high",
+                "suggested_action": "Ask customer to clarify or provide supporting document",
+            })
+
+        # Not-found claims where documentation could help
+        not_found_count = summary.get("not_found", 0)
+        if not_found_count >= 3:
+            gaps.append({
+                "type": "weak_verification",
+                "description": "Multiple claims could not be verified through public sources",
+                "detail": f"{not_found_count} claims had no supporting evidence found",
+                "urgency": "medium",
+                "suggested_action": "Ask for a business document: invoice, contract, or proposal",
+            })
+
+        # Suspicious items
+        for item in summary.get("suspicious_claims", []):
+            claim = item.get("claim", "")
+            reasoning = item.get("reasoning", "")
+            gaps.append({
+                "type": "suspicious",
+                "description": f"Suspicious: {claim}",
+                "detail": reasoning,
+                "urgency": "medium",
+                "suggested_action": "Ask for clarification or evidence",
+            })
+
+        return gaps
+
     def get_findings_for_risk_analyst(self) -> dict:
         """Format all assessments for the Risk Analyst."""
         return {

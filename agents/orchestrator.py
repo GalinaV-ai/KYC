@@ -58,6 +58,9 @@ class KYCOrchestrator:
         self._last_question: Optional[str] = None
         self.paste_flags: list[dict] = []
 
+        # ── Gap-closing ──
+        self._gap_closing_sent = False
+
         # ── Background threads ──
         self._bg_verification_thread: Optional[threading.Thread] = None
         self._bg_verification_results: list[dict] = []
@@ -111,6 +114,12 @@ class KYCOrchestrator:
         new_directives = self.assessor.get_new_directives()
         if new_directives:
             self.interviewer.add_directives(new_directives)
+
+        # ── 1b. Near end of interview — inject gap-closing directives ──
+        q_count = len(self.qa_log)
+        soft_target = self.interviewer._q_soft_target
+        if q_count == soft_target - 3 and not self._gap_closing_sent:
+            self._inject_gap_closing_directives()
 
         # ── 2. On first answer — launch initial checks in background ──
         if len(self.qa_log) == 0:
@@ -190,6 +199,47 @@ class KYCOrchestrator:
     # ═══════════════════════════════════════════
     # BACKGROUND PIPELINE
     # ═══════════════════════════════════════════
+
+    # Things we should NEVER ask the customer for as gap-closing documents
+    _FORBIDDEN_GAP_CLOSERS = [
+        "contact", "email of", "phone number of", "letter from",
+        "reference from", "confirmation from", "statement from",
+        "third party", "personal data", "linkedin", "social media",
+    ]
+
+    def _inject_gap_closing_directives(self):
+        """Near end of interview: check for information gaps and ask customer to close them."""
+        gaps = self.assessor.get_information_gaps()
+        if not gaps:
+            self._gap_closing_sent = True
+            return
+
+        directives = []
+        for gap in gaps[:3]:  # Max 3 gap-closing directives
+            action = gap.get("suggested_action", "")
+
+            # Filter out forbidden gap-closers
+            action_lower = action.lower()
+            if any(forbidden in action_lower for forbidden in self._FORBIDDEN_GAP_CLOSERS):
+                continue
+
+            directive = {
+                "area": "gap_closing",
+                "urgency": gap.get("urgency", "medium"),
+                "directive": action,
+                "desired_answer_type": "document_or_explanation",
+                "reason_code": f"gap_{gap.get('type', 'unknown')}",
+            }
+            directives.append(directive)
+
+        if directives:
+            self.interviewer.add_directives(directives)
+            self._add_reasoning({
+                "note": f"Gap-closing phase: injected {len(directives)} directives to close information gaps before interview ends.",
+                "suspicion": "none",
+            })
+
+        self._gap_closing_sent = True
 
     def _launch_background_pipeline(self, answer: str, question_context: str):
         """Launch fact extraction → verification → assessment in background."""
