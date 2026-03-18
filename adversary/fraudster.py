@@ -204,7 +204,7 @@ class FraudsterAgent:
             model=MODEL,
             messages=messages,
             temperature=0.9,
-            max_tokens=120,  # Hard cap: ~40 words max
+            max_completion_tokens=120,  # Hard cap: ~40 words max
         )
 
         reply = response.choices[0].message.content.strip()
