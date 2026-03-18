@@ -3,7 +3,7 @@
 Adversary Duel — Agent vs Agent testing page.
 
 A fraudster agent (OpenAI GPT-5.4) tries to pass the KYC interview.
-The user watches the dialogue in real-time and sees full KYC reasoning.
+The user watches the dialogue in real-time — each message appears immediately.
 
 Completely isolated: the adversary module has NO access to KYC prompts or logic.
 """
@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 
 import streamlit as st
 
@@ -65,10 +66,6 @@ st.markdown("""
         padding: 6px 10px; border-radius: 4px; margin: 4px 0;
         font-size: 0.82em; display: inline-block;
     }
-    .turn-divider {
-        border-top: 1px dashed #ccc; margin: 12px 0 8px 0;
-        font-size: 0.72em; color: #aaa; text-align: center;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -78,11 +75,10 @@ st.markdown("""
 def init_duel_state():
     defaults = {
         "duel": None,
-        "duel_events": [],       # list of DuelEvent
-        "duel_running": False,
+        "duel_events_data": [],  # list of dicts (serialized events)
         "duel_complete": False,
         "duel_legend": None,
-        "duel_step": 0,          # current step in incremental execution
+        "duel_case_id": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -96,211 +92,84 @@ def reset_duel():
     init_duel_state()
 
 
-# ─── Incremental execution ───
-# Instead of running the entire duel and showing nothing until done,
-# we run ONE step per Streamlit rerun cycle. Each step = one exchange.
-# Events accumulate in session_state and render immediately.
+# ─── Async helpers ───
 
-async def run_one_step(duel: DuelOrchestrator) -> list[DuelEvent]:
-    """Execute one step of the duel: fraudster reply + KYC processing. Returns new events."""
-    new_events = []
-
-    # If no events yet, start the interview
-    if not duel.events:
-        greeting = await duel.kyc_orchestrator.start_interview(business_stage="existing")
-        event = DuelEvent("message", "kyc", greeting)
-        duel.events.append(event)
-        new_events.append(event)
-        return new_events
-
-    # If interview is complete, run assessment
-    if duel.kyc_orchestrator.interview_complete and not duel.is_complete:
-        assessment = await duel.kyc_orchestrator.run_assessment()
-        event = DuelEvent(
-            "assessment", "kyc",
-            json.dumps(assessment, indent=2, ensure_ascii=False),
-            metadata={"decision": assessment.get("decision", "unknown")},
-        )
-        duel.events.append(event)
-        new_events.append(event)
-        duel.is_complete = True
-        return new_events
-
-    # Normal turn: fraudster responds, then KYC processes
-    if duel.is_complete:
-        return new_events
-
-    # Get last KYC message
-    last_kyc = None
-    for e in reversed(duel.events):
-        if e.source == "kyc" and e.event_type == "message":
-            last_kyc = e.content
-            break
-
-    if not last_kyc:
-        return new_events
-
-    # Fraudster responds
-    fraudster_reply = duel.fraudster.respond(last_kyc)
-    event = DuelEvent("message", "fraudster", fraudster_reply)
-    duel.events.append(event)
-    new_events.append(event)
-
-    # Check for document generation
-    if duel.fraudster.should_offer_document(last_kyc):
-        try:
-            from adversary.doc_generator import generate_fake_document
-            doc_type = duel._infer_doc_type(last_kyc)
-            doc_path = generate_fake_document(
-                doc_type=doc_type,
-                legend=duel.fraudster.legend,
-                output_dir=duel.doc_output_dir,
-                context=last_kyc,
-            )
-            doc_event = DuelEvent(
-                "document", "fraudster",
-                f"Generated fake {doc_type}: {os.path.basename(doc_path)}",
-                metadata={"doc_type": doc_type, "path": doc_path},
-            )
-            duel.events.append(doc_event)
-            new_events.append(doc_event)
-
-            doc_response = await duel.kyc_orchestrator.process_document_upload(doc_path, doc_type)
-            doc_ack = DuelEvent("message", "kyc", doc_response,
-                                metadata={"type": "doc_acknowledgement"})
-            duel.events.append(doc_ack)
-            new_events.append(doc_ack)
-        except Exception as e:
-            err = DuelEvent("system", "system", f"Doc generation failed: {e}")
-            duel.events.append(err)
-            new_events.append(err)
-
-    # Yield reasoning snapshot
-    reasoning = duel.kyc_orchestrator.get_reasoning_log()
-    if reasoning:
-        latest = reasoning[-1]
-        r_event = DuelEvent("reasoning", "kyc", json.dumps(latest, ensure_ascii=False),
-                            metadata={"full_log_length": len(reasoning)})
-        duel.events.append(r_event)
-        new_events.append(r_event)
-
-    # KYC processes fraudster's answer
-    kyc_response = await duel.kyc_orchestrator.process_customer_input(fraudster_reply)
-
-    is_done = duel.kyc_orchestrator.interview_complete
-    event = DuelEvent("message", "kyc", kyc_response,
-                      metadata={"interview_complete": is_done} if is_done else {})
-    duel.events.append(event)
-    new_events.append(event)
-
-    # Safety limit
-    msg_count = sum(1 for e in duel.events if e.event_type == "message" and e.source == "fraudster")
-    if msg_count >= 40:
-        duel.kyc_orchestrator.interview_complete = True
-
-    return new_events
-
-
-def run_one_step_sync(duel: DuelOrchestrator) -> list[DuelEvent]:
+def _run_async(coro):
+    """Run an async coroutine synchronously."""
     loop = asyncio.new_event_loop()
     try:
-        return loop.run_until_complete(run_one_step(duel))
+        return loop.run_until_complete(coro)
     finally:
         loop.close()
 
 
-# ─── Rendering ───
+# ─── Rendering helpers ───
 
-def render_event(event):
-    """Render a single duel event."""
-    if isinstance(event, dict):
-        etype = event.get("event_type", "")
-        source = event.get("source", "")
-        content = event.get("content", "")
-        metadata = event.get("metadata", {})
-    else:
-        etype = event.event_type
-        source = event.source
-        content = event.content
-        metadata = event.metadata
-
-    if etype == "message":
-        if source == "kyc":
-            st.markdown(f'<div class="kyc-msg"><b>🏦 KYC Agent:</b><br>{content}</div>',
-                        unsafe_allow_html=True)
-        elif source == "fraudster":
-            st.markdown(f'<div class="fraud-msg"><b>🎭 Fraudster:</b><br>{content}</div>',
-                        unsafe_allow_html=True)
-
-    elif etype == "document":
-        doc_name = os.path.basename(metadata.get("path", "document.pdf"))
-        st.markdown(f'<div class="doc-badge">📄 <b>Fake doc:</b> {doc_name} ({metadata.get("doc_type", "")})</div>',
-                    unsafe_allow_html=True)
-
-    elif etype == "legend":
-        st.markdown(f'<div class="system-msg">🎭 {content}</div>',
-                    unsafe_allow_html=True)
-
-    elif etype == "system":
-        st.markdown(f'<div class="system-msg">⚙️ {content}</div>',
-                    unsafe_allow_html=True)
+def render_message(container, source: str, content: str):
+    """Render a chat message into a Streamlit container."""
+    if source == "kyc":
+        container.markdown(
+            f'<div class="kyc-msg"><b>🏦 KYC Agent:</b><br>{content}</div>',
+            unsafe_allow_html=True,
+        )
+    elif source == "fraudster":
+        container.markdown(
+            f'<div class="fraud-msg"><b>🎭 Fraudster:</b><br>{content}</div>',
+            unsafe_allow_html=True,
+        )
 
 
-def render_reasoning_event(event):
-    """Render a reasoning event in the right panel."""
-    if isinstance(event, dict):
-        content = event.get("content", "")
-    else:
-        content = event.content
-
-    try:
-        reasoning = json.loads(content)
-        note = reasoning.get("note", "")
-        suspicion = reasoning.get("suspicion", "none")
-        if note:
-            st.markdown(f'<div class="reasoning-card">🧠 {note} <i>(suspicion: {suspicion})</i></div>',
-                        unsafe_allow_html=True)
-    except (json.JSONDecodeError, TypeError):
-        pass
+def render_reasoning(container, reasoning_data: dict):
+    """Render a reasoning entry."""
+    note = reasoning_data.get("note", "")
+    suspicion = reasoning_data.get("suspicion", "none")
+    if note:
+        container.markdown(
+            f'<div class="reasoning-card">🧠 {note} <i>(suspicion: {suspicion})</i></div>',
+            unsafe_allow_html=True,
+        )
 
 
-def render_assessment(event):
-    """Render the final assessment with verdict."""
-    content = event.content if hasattr(event, "content") else event.get("content", "")
-    metadata = event.metadata if hasattr(event, "metadata") else event.get("metadata", {})
+def render_system(container, content: str):
+    container.markdown(
+        f'<div class="system-msg">⚙️ {content}</div>',
+        unsafe_allow_html=True,
+    )
 
-    try:
-        assessment = json.loads(content)
-    except json.JSONDecodeError:
-        st.error("Failed to parse assessment")
-        return
 
+def render_doc(container, doc_type: str, filename: str):
+    container.markdown(
+        f'<div class="doc-badge">📄 <b>Fake doc:</b> {filename} ({doc_type})</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_verdict(container, assessment: dict):
+    """Render final verdict."""
     decision = assessment.get("decision", assessment.get("recommendation", "unknown")).lower()
 
-    st.markdown("---")
-    st.markdown("## Final Verdict")
+    container.markdown("---")
+    container.markdown("## Final Verdict")
 
     if "approve" in decision:
-        st.markdown('<div class="verdict-approve">✅ <b>APPROVED</b> — The fraudster passed!</div>',
-                    unsafe_allow_html=True)
+        container.markdown(
+            '<div class="verdict-approve">✅ <b>APPROVED</b> — The fraudster passed!</div>',
+            unsafe_allow_html=True,
+        )
     elif "decline" in decision or "reject" in decision:
-        st.markdown('<div class="verdict-decline">❌ <b>DECLINED</b> — The fraudster was caught!</div>',
-                    unsafe_allow_html=True)
+        container.markdown(
+            '<div class="verdict-decline">❌ <b>DECLINED</b> — The fraudster was caught!</div>',
+            unsafe_allow_html=True,
+        )
     elif "escalat" in decision:
-        st.markdown('<div class="verdict-escalate">⚠️ <b>ESCALATED</b> — Sent for manual review</div>',
-                    unsafe_allow_html=True)
+        container.markdown(
+            '<div class="verdict-escalate">⚠️ <b>ESCALATED</b> — Sent for manual review</div>',
+            unsafe_allow_html=True,
+        )
     else:
-        st.info(f"Decision: {decision}")
+        container.info(f"Decision: {decision}")
 
-    with st.expander("Full Assessment", expanded=False):
-        risk_scores = assessment.get("risk_scores", {})
-        if risk_scores:
-            cols = st.columns(min(len(risk_scores), 4))
-            for col, (key, val) in zip(cols, risk_scores.items()):
-                label = key.replace("_", " ").title()
-                score = val if isinstance(val, (int, float)) else 0
-                col.metric(label, f"{int(score * 100)}%" if isinstance(score, float) else str(score))
-
+    with container.expander("Full Assessment", expanded=False):
         concerns = assessment.get("concerns", assessment.get("red_flags", []))
         if concerns:
             st.markdown("**Concerns:**")
@@ -320,86 +189,213 @@ def render_assessment(event):
 
 
 def render_legend_sidebar(legend: dict):
-    """Show the fraudster's legend in the sidebar."""
     with st.sidebar:
         st.markdown("### 🎭 Fraudster's Legend")
         st.markdown(f"**Name:** {legend.get('full_name', '?')}")
         st.markdown(f"**Company:** {legend.get('company_name', '?')}")
         st.markdown(f"**Business:** {legend.get('business_type', '?')}")
         st.markdown(f"**Revenue:** {legend.get('annual_revenue', '?')}")
-
         with st.expander("Full Legend", expanded=False):
             st.json(legend)
-
         st.markdown("---")
-        st.caption("The fraudster (GPT-5.4) sees ONLY the interviewer's messages — no reasoning, no verification results, no internal prompts.")
+        st.caption("The fraudster (GPT-5.4) sees ONLY the interviewer's messages — no reasoning, no verifications, no prompts.")
 
 
 def render_debug_downloads(duel):
     """Render JSON download buttons for debugging."""
     st.markdown("---")
     st.markdown("### 📥 Debug Downloads")
-    dl_cols = st.columns(4)
+    dl_cols = st.columns(5)
 
     events_data = [e.to_dict() for e in duel.events]
 
-    # 1. Full transcript (all events)
     with dl_cols[0]:
         st.download_button(
-            "Full Transcript",
+            "Transcript",
             data=json.dumps(events_data, indent=2, ensure_ascii=False),
             file_name=f"duel_{duel.case_id}_transcript.json",
-            mime="application/json",
-            use_container_width=True,
+            mime="application/json", use_container_width=True,
         )
 
-    # 2. Legend
     with dl_cols[1]:
         if duel.fraudster and duel.fraudster.legend:
             st.download_button(
                 "Legend",
                 data=json.dumps(duel.fraudster.legend, indent=2, ensure_ascii=False),
                 file_name=f"duel_{duel.case_id}_legend.json",
-                mime="application/json",
-                use_container_width=True,
+                mime="application/json", use_container_width=True,
             )
 
-    # 3. KYC Case JSON
     with dl_cols[2]:
         if duel.case:
             st.download_button(
                 "KYC Case",
                 data=json.dumps(duel.case.to_dict(), indent=2, ensure_ascii=False),
                 file_name=f"duel_{duel.case_id}_case.json",
-                mime="application/json",
-                use_container_width=True,
+                mime="application/json", use_container_width=True,
             )
 
-    # 4. Reasoning log
     with dl_cols[3]:
         if duel.kyc_orchestrator:
             reasoning_log = duel.kyc_orchestrator.get_reasoning_log()
             if reasoning_log:
                 st.download_button(
-                    "Reasoning Log",
+                    "Reasoning",
                     data=json.dumps(reasoning_log, indent=2, ensure_ascii=False),
                     file_name=f"duel_{duel.case_id}_reasoning.json",
-                    mime="application/json",
-                    use_container_width=True,
+                    mime="application/json", use_container_width=True,
                 )
 
-    # 5. Assessment (separate row)
-    assessment_events = [e for e in duel.events if e.event_type == "assessment"]
-    if assessment_events:
-        dl_cols2 = st.columns(4)
-        with dl_cols2[0]:
+    with dl_cols[4]:
+        assessment_events = [e for e in duel.events if e.event_type == "assessment"]
+        if assessment_events:
             st.download_button(
                 "Assessment",
                 data=assessment_events[-1].content,
                 file_name=f"duel_{duel.case_id}_assessment.json",
-                mime="application/json",
-                use_container_width=True,
+                mime="application/json", use_container_width=True,
             )
+
+
+# ═══════════════════════════════════════════════
+# LIVE DUEL — runs the entire duel in a single Streamlit execution,
+# appending messages to containers in real-time.
+# ═══════════════════════════════════════════════
+
+def run_live_duel(duel: DuelOrchestrator):
+    """
+    Execute the full duel, rendering each message as it arrives.
+    Uses st.container() so messages appear incrementally without page reloads.
+    """
+    # Two-column layout
+    chat_col, reasoning_col = st.columns([3, 2])
+
+    with chat_col:
+        st.markdown("### 💬 Conversation")
+        chat_area = st.container()
+
+    with reasoning_col:
+        st.markdown("### 🧠 KYC Reasoning & Verifications")
+        reasoning_area = st.container()
+
+    status = st.empty()
+
+    # ── Step 1: KYC greeting ──
+    status.info("⚔️ KYC agent is starting the interview...")
+    greeting = _run_async(duel.kyc_orchestrator.start_interview(business_stage="existing"))
+    event = DuelEvent("message", "kyc", greeting)
+    duel.events.append(event)
+    render_message(chat_area, "kyc", greeting)
+
+    # ── Step 2: Duel loop ──
+    max_turns = 40
+    turn = 0
+    prev_reasoning_count = 0
+    prev_verification_count = 0
+
+    while turn < max_turns and not duel.kyc_orchestrator.interview_complete:
+        turn += 1
+        status.info(f"⚔️ Turn {turn} — Fraudster is responding...")
+
+        # ── Fraudster responds ──
+        last_kyc = None
+        for e in reversed(duel.events):
+            if e.source == "kyc" and e.event_type == "message":
+                last_kyc = e.content
+                break
+
+        if not last_kyc:
+            break
+
+        fraudster_reply = duel.fraudster.respond(last_kyc)
+        event = DuelEvent("message", "fraudster", fraudster_reply)
+        duel.events.append(event)
+        render_message(chat_area, "fraudster", fraudster_reply)
+
+        # ── Document generation (if requested) ──
+        if duel.fraudster.should_offer_document(last_kyc):
+            try:
+                from adversary.doc_generator import generate_fake_document
+                doc_type = duel._infer_doc_type(last_kyc)
+                status.info(f"⚔️ Turn {turn} — Generating fake {doc_type}...")
+                doc_path = generate_fake_document(
+                    doc_type=doc_type,
+                    legend=duel.fraudster.legend,
+                    output_dir=duel.doc_output_dir,
+                    context=last_kyc,
+                )
+                doc_event = DuelEvent("document", "fraudster",
+                                      f"Generated fake {doc_type}",
+                                      metadata={"doc_type": doc_type, "path": doc_path})
+                duel.events.append(doc_event)
+                render_doc(chat_area, doc_type, os.path.basename(doc_path))
+
+                doc_response = _run_async(
+                    duel.kyc_orchestrator.process_document_upload(doc_path, doc_type)
+                )
+                doc_ack = DuelEvent("message", "kyc", doc_response,
+                                    metadata={"type": "doc_acknowledgement"})
+                duel.events.append(doc_ack)
+                render_message(chat_area, "kyc", doc_response)
+            except Exception as e:
+                err_event = DuelEvent("system", "system", f"Doc generation failed: {e}")
+                duel.events.append(err_event)
+                render_system(chat_area, str(e))
+
+        # ── KYC processes the answer ──
+        status.info(f"⚔️ Turn {turn} — KYC agent is thinking & verifying...")
+        kyc_response = _run_async(
+            duel.kyc_orchestrator.process_customer_input(fraudster_reply)
+        )
+
+        is_done = duel.kyc_orchestrator.interview_complete
+        event = DuelEvent("message", "kyc", kyc_response,
+                          metadata={"interview_complete": is_done} if is_done else {})
+        duel.events.append(event)
+        render_message(chat_area, "kyc", kyc_response)
+
+        # ── Update reasoning panel ──
+        reasoning_log = duel.kyc_orchestrator.get_reasoning_log()
+        new_reasoning = reasoning_log[prev_reasoning_count:]
+        for r in new_reasoning:
+            render_reasoning(reasoning_area, r)
+        prev_reasoning_count = len(reasoning_log)
+
+        # ── Update verifications panel ──
+        if duel.case and duel.case.verifications:
+            new_verifications = duel.case.verifications[prev_verification_count:]
+            for v in new_verifications:
+                source = v.get("source", "?")
+                query = v.get("query", "")
+                with reasoning_area.expander(f"🔍 {source}: {query[:50]}", expanded=False):
+                    st.json(v)
+            prev_verification_count = len(duel.case.verifications)
+
+    # ── Step 3: Assessment ──
+    status.info("⚔️ Running final assessment...")
+    duel.kyc_orchestrator.interview_complete = True
+    assessment = _run_async(duel.kyc_orchestrator.run_assessment())
+
+    assessment_event = DuelEvent(
+        "assessment", "kyc",
+        json.dumps(assessment, indent=2, ensure_ascii=False),
+        metadata={"decision": assessment.get("decision", "unknown")},
+    )
+    duel.events.append(assessment_event)
+    duel.is_complete = True
+
+    # Render verdict in chat column
+    render_verdict(chat_area, assessment)
+
+    # Final reasoning
+    reasoning_log = duel.kyc_orchestrator.get_reasoning_log()
+    new_reasoning = reasoning_log[prev_reasoning_count:]
+    for r in new_reasoning:
+        render_reasoning(reasoning_area, r)
+
+    status.empty()
+
+    return assessment
 
 
 # ─── Main page ───
@@ -431,154 +427,111 @@ def main():
         st.caption("Add them in Streamlit Cloud → Settings → Secrets")
         st.stop()
 
-    # ── Setup panel (before duel starts) ──
-    if not st.session_state.duel_running and not st.session_state.duel_complete:
+    # ── If duel already completed, show stored results ──
+    if st.session_state.duel_complete and st.session_state.duel:
+        duel = st.session_state.duel
 
-        st.markdown("### Setup")
-        mode = st.radio(
-            "Legend generation",
-            ["🎲 Auto-generate", "✏️ I'll provide hints"],
-            horizontal=True,
-            key="duel_mode_radio",
-        )
+        if st.session_state.duel_legend:
+            render_legend_sidebar(st.session_state.duel_legend)
 
-        hints = None
-        if "hints" in mode.lower():
-            hints = st.text_area(
-                "Describe the fraudster's business (optional details)",
-                placeholder="e.g. Nigerian man running a cleaning company in Manchester, revenue about £200k...",
-                height=100,
-                key="duel_hints",
-            )
+        # Re-render all stored events
+        chat_col, reasoning_col = st.columns([3, 2])
 
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            if st.button("⚔️ Start Duel", type="primary", use_container_width=True):
-                with st.spinner("Setting up agents & generating legend..."):
-                    duel = DuelOrchestrator()
-                    duel.setup(hints=hints if hints else None)
-                    st.session_state.duel = duel
-                    st.session_state.duel_legend = duel.fraudster.legend
-                    st.session_state.duel_events = []
-                    st.session_state.duel_running = True
-                    st.session_state.duel_complete = False
-                    st.session_state.duel_step = 0
-                    st.rerun()
-        return
+        with chat_col:
+            st.markdown("### 💬 Conversation")
+            for e in duel.events:
+                if e.event_type == "message":
+                    render_message(st, e.source, e.content)
+                elif e.event_type == "document":
+                    render_doc(st, e.metadata.get("doc_type", ""), os.path.basename(e.metadata.get("path", "")))
+                elif e.event_type == "system":
+                    render_system(st, e.content)
+                elif e.event_type == "assessment":
+                    try:
+                        render_verdict(st, json.loads(e.content))
+                    except Exception:
+                        pass
 
-    # ── Duel is running or complete — show everything ──
-    duel = st.session_state.duel
+        with reasoning_col:
+            st.markdown("### 🧠 KYC Reasoning & Verifications")
+            reasoning_log = duel.kyc_orchestrator.get_reasoning_log() if duel.kyc_orchestrator else []
+            for r in reasoning_log:
+                render_reasoning(st, r)
 
-    # Sidebar: legend + stop button
-    if st.session_state.duel_legend:
-        render_legend_sidebar(st.session_state.duel_legend)
-
-    with st.sidebar:
-        st.markdown("---")
-        if st.session_state.duel_running and not st.session_state.duel_complete:
-            if st.button("⏹ Stop Duel", type="secondary", use_container_width=True):
-                duel.kyc_orchestrator.interview_complete = True
-                duel.is_complete = True
-                st.session_state.duel_running = False
-                st.session_state.duel_complete = True
-                st.rerun()
-
-        if st.session_state.duel_complete:
-            if st.button("🔄 New Duel", type="secondary", use_container_width=True):
-                reset_duel()
-                st.rerun()
-
-    # ── If still running, execute ONE step then rerun ──
-    if st.session_state.duel_running and not st.session_state.duel_complete:
-        # Show status
-        fraud_msgs = sum(1 for e in duel.events if e.event_type == "message" and e.source == "fraudster")
-        st.info(f"⚔️ Duel in progress... Turn {fraud_msgs + 1}")
-
-        # Render all events so far
-        _render_all_events(duel)
-
-        # Run next step
-        with st.spinner("Agents are thinking..."):
-            new_events = run_one_step_sync(duel)
-
-        # Check if duel is done
-        has_assessment = any(e.event_type == "assessment" for e in duel.events)
-        if has_assessment or duel.is_complete:
-            st.session_state.duel_running = False
-            st.session_state.duel_complete = True
-
-        st.session_state.duel_step += 1
-        st.rerun()
-
-    # ── Duel complete — final render ──
-    if st.session_state.duel_complete:
-        decision = None
-        for e in duel.events:
-            if e.event_type == "assessment":
-                try:
-                    a = json.loads(e.content)
-                    decision = a.get("decision", a.get("recommendation", "?"))
-                except Exception:
-                    decision = "?"
-
-        if decision:
-            st.success(f"Duel complete — Decision: **{decision}**")
-        else:
-            st.success("Duel complete")
-
-        _render_all_events(duel)
+            if duel.case and duel.case.verifications:
+                for v in duel.case.verifications:
+                    source = v.get("source", "?")
+                    query = v.get("query", "")
+                    with st.expander(f"🔍 {source}: {query[:50]}", expanded=False):
+                        st.json(v)
 
         # Stats
         st.markdown("---")
-        stat_cols = st.columns(4)
         msgs = [e for e in duel.events if e.event_type == "message"]
-        kyc_msgs = [e for e in msgs if e.source == "kyc"]
-        fraud_msgs = [e for e in msgs if e.source == "fraudster"]
-        docs = [e for e in duel.events if e.event_type == "document"]
-
+        stat_cols = st.columns(4)
         stat_cols[0].metric("Total Messages", len(msgs))
-        stat_cols[1].metric("KYC Messages", len(kyc_msgs))
-        stat_cols[2].metric("Fraudster Answers", len(fraud_msgs))
-        stat_cols[3].metric("Fake Docs", len(docs))
+        stat_cols[1].metric("KYC Messages", len([e for e in msgs if e.source == "kyc"]))
+        stat_cols[2].metric("Fraudster Answers", len([e for e in msgs if e.source == "fraudster"]))
+        stat_cols[3].metric("Fake Docs", len([e for e in duel.events if e.event_type == "document"]))
 
-        # Debug downloads
         render_debug_downloads(duel)
 
+        if st.button("🔄 New Duel", type="secondary"):
+            reset_duel()
+            st.rerun()
 
-def _render_all_events(duel):
-    """Render full conversation + reasoning in two columns."""
-    chat_col, reasoning_col = st.columns([3, 2])
+        return
 
-    messages = [e for e in duel.events if e.event_type in ("message", "document", "legend", "system")]
-    reasoning_events = [e for e in duel.events if e.event_type == "reasoning"]
-    assessment_events = [e for e in duel.events if e.event_type == "assessment"]
+    # ── Setup panel ──
+    st.markdown("### Setup")
+    mode = st.radio(
+        "Legend generation",
+        ["🎲 Auto-generate", "✏️ I'll provide hints"],
+        horizontal=True,
+        key="duel_mode_radio",
+    )
 
-    with chat_col:
-        st.markdown("### 💬 Conversation")
-        for event in messages:
-            render_event(event)
+    hints = None
+    if "hints" in mode.lower():
+        hints = st.text_area(
+            "Describe the fraudster's business (optional details)",
+            placeholder="e.g. Nigerian man running a cleaning company in Manchester, revenue about £200k...",
+            height=100,
+            key="duel_hints",
+        )
 
-        for event in assessment_events:
-            render_assessment(event)
+    if st.button("⚔️ Start Duel", type="primary"):
+        # Setup phase
+        with st.spinner("Setting up agents & generating legend..."):
+            duel = DuelOrchestrator()
+            duel.setup(hints=hints if hints else None)
+            st.session_state.duel = duel
+            st.session_state.duel_legend = duel.fraudster.legend
+            st.session_state.duel_case_id = duel.case_id
 
-    with reasoning_col:
-        st.markdown("### 🧠 KYC Reasoning")
-        if reasoning_events:
-            for event in reasoning_events:
-                render_reasoning_event(event)
-        else:
-            st.caption("Waiting for first verification cycle...")
+        # Show legend
+        render_legend_sidebar(duel.fraudster.legend)
 
-        # Verifications
-        if duel.kyc_orchestrator:
-            case = duel.case
-            if case and case.verifications:
-                st.markdown("### 🔍 Verifications")
-                for v in case.verifications:
-                    source = v.get("source", "?")
-                    query = v.get("query", "")
-                    with st.expander(f"{source}: {query[:50]}"):
-                        st.json(v)
+        # Run the entire duel live — messages appear in real-time
+        run_live_duel(duel)
+
+        # Mark complete for future page reruns
+        st.session_state.duel_complete = True
+
+        # Stats
+        st.markdown("---")
+        msgs = [e for e in duel.events if e.event_type == "message"]
+        stat_cols = st.columns(4)
+        stat_cols[0].metric("Total Messages", len(msgs))
+        stat_cols[1].metric("KYC Messages", len([e for e in msgs if e.source == "kyc"]))
+        stat_cols[2].metric("Fraudster Answers", len([e for e in msgs if e.source == "fraudster"]))
+        stat_cols[3].metric("Fake Docs", len([e for e in duel.events if e.event_type == "document"]))
+
+        render_debug_downloads(duel)
+
+        if st.button("🔄 New Duel", type="secondary", key="new_duel_after"):
+            reset_duel()
+            st.rerun()
 
 
 if __name__ == "__main__":
