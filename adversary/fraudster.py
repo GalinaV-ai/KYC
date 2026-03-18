@@ -14,6 +14,7 @@ Capabilities:
 
 import json
 import os
+import random
 from datetime import datetime
 from typing import Optional
 
@@ -22,43 +23,120 @@ from openai import OpenAI
 # ─── Model ───
 MODEL = "gpt-5.4"
 
-# ─── Legend generation prompt ───
-LEGEND_GENERATOR_PROMPT = """You are a creative fiction writer. Your job is to generate a DETAILED, REALISTIC fake business identity for a person who wants to open a UK bank account.
+# ─── Diversity pools for legend generation ───
+_ORIGINS = [
+    "Nigerian", "Pakistani", "Indian", "Romanian", "Polish", "Bangladeshi",
+    "Ghanaian", "Turkish", "Iranian", "Chinese", "Brazilian", "Somali",
+    "Lithuanian", "Bulgarian", "Jamaican", "Kenyan", "Sri Lankan",
+    "Egyptian", "Moroccan", "Vietnamese", "Filipino", "Albanian",
+    "Eritrean", "Afghan", "Syrian", "Ukrainian", "Latvian", "Portuguese",
+    "South African", "Zimbabwean", "Ethiopian", "Colombian", "Spanish",
+    "Italian", "Greek", "Iraqi", "Lebanese", "Sudanese", "Congolese",
+    "British-born (second generation)", "Scottish", "Welsh",
+]
 
-The identity must be:
-- Believable and internally consistent
-- Based on a real type of business that exists in the UK
-- With plausible financial numbers
-- With a backstory that feels natural (migration story, career history, etc.)
+_BUSINESS_TYPES = [
+    "commercial cleaning", "residential cleaning", "restaurant",
+    "takeaway / fast food", "barber shop / hair salon", "nail salon",
+    "IT consulting", "web development", "app development",
+    "import/export (textiles)", "import/export (electronics)",
+    "import/export (food products)", "construction subcontractor",
+    "plumbing", "electrical contractor", "painting & decorating",
+    "car wash", "auto repair garage", "driving school",
+    "security guard company", "property management",
+    "lettings agency", "convenience shop / off-licence",
+    "launderette", "tailoring / alterations", "catering",
+    "event planning", "photography studio", "mobile phone repair",
+    "money transfer / MSB", "accounting / bookkeeping",
+    "private tuition", "nursery / childcare", "care home staffing agency",
+    "courier / delivery service", "freight forwarding",
+    "scrap metal dealer", "jewellery wholesale", "market stall trader",
+    "beauty treatments (mobile)", "fitness / personal training",
+    "dog grooming", "tattoo studio", "vape shop",
+    "software as a service (SaaS)", "data analytics consultancy",
+    "digital marketing agency", "e-commerce (dropshipping)",
+    "cryptocurrency OTC desk", "forex signals / trading education",
+    "recruitment agency", "translation services",
+    "physiotherapy clinic", "dental practice",
+    "architecture firm", "graphic design studio",
+]
 
-Generate the following fields as a JSON object:
+_UK_CITIES = [
+    "London (East)", "London (South)", "London (North)", "London (West)",
+    "Birmingham", "Manchester", "Leeds", "Bradford", "Leicester",
+    "Coventry", "Nottingham", "Sheffield", "Bristol", "Liverpool",
+    "Newcastle", "Southampton", "Portsmouth", "Reading", "Luton",
+    "Slough", "Wolverhampton", "Derby", "Stoke-on-Trent", "Cardiff",
+    "Edinburgh", "Glasgow", "Belfast", "Swansea", "Aberdeen",
+    "Milton Keynes", "Northampton", "Swindon", "Crawley", "Ipswich",
+    "Peterborough", "Oxford", "Cambridge", "Brighton", "Bournemouth",
+]
 
-{
-  "full_name": "A realistic name (pick an ethnicity/origin)",
-  "date_of_birth": "DD/MM/YYYY",
-  "nationality": "Country of origin",
-  "uk_arrival_year": 2015,
-  "address": "A realistic UK address (use a real postcode area)",
-  "company_name": "A plausible UK company name",
+_REVENUE_RANGES = [
+    "micro (£15k-£40k)", "small (£40k-£100k)", "medium (£100k-£300k)",
+    "growing (£300k-£600k)", "established (£600k-£1.5M)",
+]
+
+_AGE_RANGES = ["22-28", "29-35", "36-45", "46-55", "56-65"]
+
+_FRAUD_FLAVORS = [
+    "shell company (no real operations)",
+    "real-looking business with inflated revenue",
+    "identity theft (using someone else's name/history)",
+    "front for money laundering",
+    "legitimate-seeming but planning to abuse the account",
+    "recently incorporated with fabricated trading history",
+    "stolen company details with changed director",
+    "business that exists on paper but is dormant",
+]
+
+def _build_legend_prompt() -> str:
+    """Build a legend generation prompt with random diversity parameters."""
+    origin = random.choice(_ORIGINS)
+    biz_type = random.choice(_BUSINESS_TYPES)
+    city = random.choice(_UK_CITIES)
+    revenue = random.choice(_REVENUE_RANGES)
+    age = random.choice(_AGE_RANGES)
+    fraud = random.choice(_FRAUD_FLAVORS)
+
+    return f"""You are a creative fiction writer. Generate a DETAILED, REALISTIC fake business identity for a person who wants to open a UK bank account.
+
+THIS CHARACTER MUST BE:
+- Origin/ethnicity: {origin}
+- Age range: {age}
+- Business type: {biz_type}
+- Located in: {city}
+- Revenue range: {revenue}
+- Fraud type: {fraud}
+
+Generate the following JSON object:
+
+{{
+  "full_name": "A realistic name matching the origin above",
+  "date_of_birth": "DD/MM/YYYY (matching age range)",
+  "nationality": "Country matching the origin",
+  "uk_arrival_year": "Year they came to UK (or born here if British)",
+  "address": "A realistic address in {city} (use a real postcode area)",
+  "company_name": "A plausible UK company name for this business type",
   "company_number": "A plausible Companies House number (8 digits)",
-  "business_type": "e.g. restaurant, IT consulting, import/export, cleaning...",
+  "business_type": "{biz_type}",
   "industry": "SIC code description",
   "incorporation_date": "YYYY-MM-DD",
-  "annual_revenue": "e.g. £120,000",
-  "monthly_transactions": "e.g. 40-60",
-  "avg_transaction_value": "e.g. £2,000",
-  "employees": 3,
-  "website": "A plausible domain name",
+  "annual_revenue": "Amount in the {revenue} range",
+  "monthly_transactions": "Plausible number for this business",
+  "avg_transaction_value": "Plausible amount for this business",
+  "employees": "Plausible number",
+  "website": "A plausible domain name (or null if too small)",
   "business_description": "2-3 sentences about what the business does",
-  "backstory": "3-5 sentences: where this person came from, how they got into this business, why they moved to the UK",
+  "backstory": "3-5 sentences: where this person came from, how they got into this business, why they moved to the UK. Must feel AUTHENTIC to the origin and business type.",
   "key_clients": ["Client A", "Client B"],
   "key_suppliers": ["Supplier A"],
-  "bank_reason": "Why they need a new bank account"
-}
+  "bank_reason": "Why they need a new bank account",
+  "fraud_notes": "Internal notes on what's actually fake about this identity (not visible to interviewer)"
+}}
 
-Make it creative but REALISTIC. Small businesses run by first-generation immigrants are common — restaurants, cleaning companies, import/export, tech consultancies, construction subcontractors, etc.
-
-IMPORTANT: The legend should have subtle weaknesses that a good investigator might catch — maybe the company number doesn't match real records, or the revenue seems high for the business type, or the timeline has small gaps. Real fraudsters aren't perfect."""
+IMPORTANT: The legend should have subtle weaknesses matching the fraud type ({fraud}). Real fraudsters aren't perfect — there should be cracks an investigator might find.
+Return ONLY valid JSON."""
 
 LEGEND_WITH_HINTS_PROMPT = """You are a creative fiction writer. Generate a DETAILED fake business identity for someone opening a UK bank account.
 
@@ -141,7 +219,7 @@ class FraudsterAgent:
                 hints=hints, json_template=json_template
             )
         else:
-            prompt = LEGEND_GENERATOR_PROMPT
+            prompt = _build_legend_prompt()  # randomized each time
 
         response = self.client.chat.completions.create(
             model=MODEL,

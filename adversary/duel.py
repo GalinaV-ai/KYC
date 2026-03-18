@@ -86,7 +86,8 @@ class DuelOrchestrator:
         ))
 
         # ── KYC setup ──
-        self.case_id = f"DUEL-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+        # Use standard KYC case ID format — the KYC agent must NOT know it's a duel
+        self.case_id = f"KYC-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
         self.case = KYCCase(
             case_id=self.case_id,
             created_at=datetime.now().isoformat(),
