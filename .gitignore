@@ -1,6 +1,7 @@
-# Environment
+# Environment & secrets
 .env
 *.env
+.streamlit/secrets.toml
 
 # Cases (contain customer PII)
 cases/
