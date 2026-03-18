@@ -6,12 +6,61 @@ Receives probing directives from the Assessor to guide questioning.
 Outputs: next question to ask the customer + internal reasoning.
 """
 import json
+import random
 from datetime import datetime
 from typing import Optional
 
 from anthropic import AsyncAnthropic
 
 from agents.prompts import INTERVIEWER_PROMPT
+
+# ─── Interview personality injection ───
+# Each interview gets a random combination of style, focus area, and opening approach.
+# This forces the LLM to vary its questions structurally, not just lexically.
+
+_INTERVIEW_STYLES = [
+    "You're warm and genuinely curious. You love hearing about small businesses and ask follow-ups that show real interest. Your tone is friendly and encouraging.",
+    "You're professional and efficient. You get to the point quickly, ask precise questions, and don't waste time on pleasantries. Polite but businesslike.",
+    "You're experienced and slightly skeptical — you've seen a lot of applications. You ask probing questions naturally, not aggressively. You notice details.",
+    "You're new to the role and enthusiastic. You ask questions with genuine wonder — 'oh that's interesting, how does that work?' Your curiosity is authentic.",
+    "You're calm and methodical. You let silences sit. You ask one question and wait. You don't rush to fill gaps. Your patience makes people talk more.",
+    "You're conversational and a bit chatty. You share small observations ('ah, Manchester — great city for startups') to build rapport before asking the real questions.",
+]
+
+_FOCUS_AREAS = [
+    "Focus early on HOW the business makes money day-to-day. You want to understand the mechanics: who pays whom, for what, how often.",
+    "Focus early on the PERSON — their journey, background, how they ended up running this business. People who really run businesses have stories.",
+    "Focus early on CLIENTS — who are they, how did the customer find them, what's the relationship like. Real businesses have real client relationships.",
+    "Focus early on NUMBERS — not just revenue, but the shape of the business: how many jobs per month, average deal size, seasonal patterns.",
+    "Focus early on COMPETITION — who else does what they do, why would someone choose them, what's their edge. Real owners know their market.",
+    "Focus early on OPERATIONS — where they work from, what a typical day looks like, what tools they use. Real owners describe this effortlessly.",
+    "Focus early on GROWTH — how the business has changed over time, what's next, what they'd do differently. Tests forward-thinking and genuine involvement.",
+    "Focus early on PROBLEMS — what's hard about their business, what goes wrong, what they'd fix. Only real owners have real complaints.",
+]
+
+_OPENING_APPROACHES = [
+    "Start by asking about THEM personally — how they ended up in this line of work.",
+    "Start by asking about the BUSINESS — what exactly does the company do.",
+    "Start by asking about the BANKING NEED — why they're opening an account now, what triggered it.",
+    "Start with something SPECIFIC from their application — their company name or industry — and ask them to tell you more.",
+    "Start with a CASUAL icebreaker — ask how their day is going, then naturally transition to the business.",
+    "Start by asking how LONG they've been running the business — timeline is a natural conversation opener.",
+    "Start by asking about their LOCATION — where they operate from, why that area.",
+    "Start by asking what they're MOST PROUD OF in their business — an unusual opener that reveals character.",
+]
+
+def _generate_interview_personality() -> str:
+    """Generate a unique interview personality for this session."""
+    style = random.choice(_INTERVIEW_STYLES)
+    focus = random.choice(_FOCUS_AREAS)
+    opening = random.choice(_OPENING_APPROACHES)
+    return f"""
+YOUR INTERVIEW PERSONALITY (for this session — follow this throughout):
+STYLE: {style}
+FOCUS: {focus}
+OPENING: {opening}
+
+IMPORTANT: These are YOUR tendencies for this interview. Don't mention them to the customer. Just let them shape how you ask questions naturally."""
 
 MODEL_INTERVIEWER = "claude-sonnet-4-20250514"
 
@@ -36,6 +85,9 @@ class Interviewer:
         # Question budget
         self._q_soft_target = 18
         self._q_hard_max = 30
+
+        # Random interview personality — set once per session for consistency
+        self._personality = _generate_interview_personality()
 
     def add_directives(self, directives: list[dict]):
         """Add probing directives from the Assessor."""
@@ -260,6 +312,9 @@ class Interviewer:
     def _build_system_message(self) -> str:
         """Build the system message with current interview context."""
         parts = [INTERVIEWER_PROMPT]
+
+        # Inject interview personality (randomized per session)
+        parts.append(self._personality)
 
         # Inject current date so the agent can reason about timelines
         parts.append(f"\n\nTODAY'S DATE: {datetime.now().strftime('%d %B %Y')}")
