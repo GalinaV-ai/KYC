@@ -128,6 +128,12 @@ class FraudsterAgent:
     def __init__(self, legend: Optional[dict] = None):
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
+            try:
+                import streamlit as st
+                api_key = st.secrets.get("OPENAI_API_KEY")
+            except Exception:
+                pass
+        if not api_key:
             raise ValueError("OPENAI_API_KEY not set")
         self.client = OpenAI(api_key=api_key)
         self.legend: Optional[dict] = legend

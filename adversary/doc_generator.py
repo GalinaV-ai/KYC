@@ -64,6 +64,12 @@ def generate_document_content(
     """Use LLM to generate realistic document content."""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
+        try:
+            import streamlit as st
+            api_key = st.secrets.get("OPENAI_API_KEY")
+        except Exception:
+            pass
+    if not api_key:
         raise ValueError("OPENAI_API_KEY not set")
 
     client = OpenAI(api_key=api_key)

@@ -235,16 +235,25 @@ def main():
     st.markdown("# 🎭 Adversary Duel")
     st.caption("Fraudster (OpenAI GPT-5.4) vs KYC Agent (Claude) — automated stress test")
 
-    # Check API keys
+    # Check API keys (env vars or Streamlit secrets)
+    def _get_key(name):
+        val = os.getenv(name)
+        if not val:
+            try:
+                val = st.secrets.get(name)
+            except Exception:
+                pass
+        return val
+
     missing_keys = []
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    if not _get_key("ANTHROPIC_API_KEY"):
         missing_keys.append("ANTHROPIC_API_KEY")
-    if not os.getenv("OPENAI_API_KEY"):
+    if not _get_key("OPENAI_API_KEY"):
         missing_keys.append("OPENAI_API_KEY")
 
     if missing_keys:
         st.error(f"Missing API keys: {', '.join(missing_keys)}")
-        st.code("\n".join(f"export {k}='...'" for k in missing_keys), language="bash")
+        st.caption("Add them in Streamlit Cloud → Settings → Secrets")
         st.stop()
 
     # ── Setup panel ──
