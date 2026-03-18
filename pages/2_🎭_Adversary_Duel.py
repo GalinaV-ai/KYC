@@ -20,6 +20,23 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from adversary.duel import DuelOrchestrator, DuelEvent
 from adversary.fraudster import FraudsterAgent
 
+import subprocess
+
+def _get_version() -> str:
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%h (%ad)", "--date=short"],
+            capture_output=True, text=True, cwd=root, timeout=3,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+APP_VERSION = _get_version()
+
 # Note: page_config is set by the main web_app.py — not here
 
 # ─── CSS ───
@@ -190,6 +207,7 @@ def render_verdict(container, assessment: dict):
 
 def render_legend_sidebar(legend: dict):
     with st.sidebar:
+        st.caption(f"v {APP_VERSION}")
         st.markdown("### 🎭 Fraudster's Legend")
         st.markdown(f"**Name:** {legend.get('full_name', '?')}")
         st.markdown(f"**Company:** {legend.get('company_name', '?')}")
@@ -402,6 +420,9 @@ def run_live_duel(duel: DuelOrchestrator):
 
 def main():
     init_duel_state()
+
+    with st.sidebar:
+        st.caption(f"v {APP_VERSION}")
 
     st.markdown("# 🎭 Adversary Duel")
     st.caption("Fraudster (OpenAI GPT-5.4) vs KYC Agent (Claude) — automated stress test")
